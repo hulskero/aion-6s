@@ -200,13 +200,23 @@ class AION:
         ) or "  (none)"
         return f"""You are AION-6S on a jailbroken iPhone 6s (2GB RAM, a-Shell/NewTerm).
 
-AVAILABLE:
+AVAILABLE NÁSTROJE:
 {plugin_list}
+  @cmd <shell command>     - execute system command
+  @shortcut <name> [input] - run iOS Shortcut
 
-COMMANDS:
-  @cmd <shell command>     - Execute system command
-  @plugin <name> [args]    - Run a plugin skill
-  @shortcut <name> [input] - Run iOS Shortcut
+JAK POUŽÍVAT NÁSTROJE:
+Když uživatel požádá o něco co vyžaduje nástroj, postupuj takto:
+
+1. NAPIŠ nástroj (např. @plugin battery nebo @cmd pmset -g batt)
+2. POČKEJ — systém nástroj spustí, výsledek uvidíš
+3. DEJ FINÁLNÍ ODPOVĚĎ na základě výsledku
+
+Příklad:
+  Uživatel: "dej mi baterku"
+  Ty: @plugin battery
+  [systém spustí, ty uvidíš: "Battery: 85%, discharging"]
+  Ty: "Máš 85% baterky, telefon se vybíjí, vydrží asi 3 hodiny."
 
 MODES (user switches with /plan, /build, /auto, /chat):
   plan  — you list the steps, user reviews before any execute
@@ -222,7 +232,7 @@ SECURITY RULES (strictly follow):
 - Commands over 500 characters are blocked.
 
 RULES:
-- Be concise.
+- Be concise in final answers.
 - When a command fails, analyze the error and suggest a fix.
 - Memory is tight (2GB) — keep responses short.
 - In /plan mode: output numbered steps using @cmd, they won't run.
@@ -294,9 +304,12 @@ RULES:
         if name in self.plugins:
             cl("SYS", f"  [plugin] {name} {args}")
             output = self.plugins[name]["run"](args)
-            print(output)
-        else:
-            cl("ERR", f"  Plugin '{name}' not found. Available: {list(self.plugins.keys())}")
+            if output:
+                print(output)
+            return output or ""
+        msg = f"Plugin '{name}' not found. Available: {list(self.plugins.keys())}"
+        cl("ERR", f"  {msg}")
+        return msg
 
     def _exec_shortcut(self, name, inp=None):
         cl("SYS", f"  [shortcut] {name}")
@@ -308,19 +321,48 @@ RULES:
         if blocked:
             cl("ERR", f"  {blocked}")
             audit_log({"t": time.time(), "action": "ai_blocked", "reason": blocked})
-            return
+            return []
 
+        results = []
         for match in re.finditer(r'@(cmd|plugin|shortcut)\s+(.+)', text, re.MULTILINE):
             kind = match.group(1)
             rest = match.group(2).strip().strip('"').strip("'")
+            result = {"kind": kind, "input": rest, "stdout": "", "success": False}
             if kind == "cmd":
-                self._exec_cmd(rest)
+                cmd_res = self._exec_cmd(rest)
+                if cmd_res:
+                    result["stdout"] = (cmd_res.get("stdout") or "") + (cmd_res.get("stderr") or "")
+                    result["success"] = cmd_res.get("success", False)
+                    result["exit_code"] = cmd_res.get("exit_code", 0)
             elif kind == "plugin":
                 parts = rest.split(None, 1)
-                self._exec_plugin(parts[0], parts[1] if len(parts) > 1 else "")
+                output = self._exec_plugin(parts[0], parts[1] if len(parts) > 1 else "")
+                result["stdout"] = output
+                result["success"] = True
             elif kind == "shortcut":
                 parts = rest.split(None, 1)
                 self._exec_shortcut(parts[0], parts[1] if len(parts) > 1 else None)
+                result["success"] = True
+            results.append(result)
+        return results
+
+    def _format_tool_results(self, results):
+        lines = []
+        for r in results:
+            kind = r["kind"]
+            inp = r["input"]
+            if kind == "cmd":
+                status = "OK" if r["success"] else f"FAILED (exit {r.get('exit_code', '?')})"
+                lines.append(f"[cmd] $ {inp}  [{status}]")
+                if r.get("stdout"):
+                    lines.append(r["stdout"].rstrip())
+            elif kind == "plugin":
+                lines.append(f"[plugin] {inp}")
+                if r.get("stdout"):
+                    lines.append(r["stdout"].rstrip())
+            elif kind == "shortcut":
+                lines.append(f"[shortcut] {inp}")
+        return "\n".join(lines)
 
     def _handle_special(self, line):
         from core.guardrails import reset_confirm
@@ -462,6 +504,7 @@ RULES:
             cl("ERR", f"Unknown: {cmd}")
 
     def run(self):
+        MAX_TOOL_ROUNDS = 5
         cl("SYS", f"{ANSI['BOLD']}AION-6S{ANSI['RST']} ready  |  {len(self.plugins)} plugin(s)  |  {self.config['model']}")
         cl("SYS", f"Mode: {self.mode}  |  Type /help for commands.")
 
@@ -501,22 +544,41 @@ RULES:
             self.memory.add("user", line)
 
             c("AI", "AI> ")
-            full = ""
+            response = ""
             try:
                 for token in self.bridge.stream(self.memory.get_context()):
                     sys.stdout.write(token)
                     sys.stdout.flush()
-                    full += token
+                    response += token
             except Exception as e:
                 cl("ERR", f"\n[API Error] {e}")
                 continue
-
             print()
-            self.memory.add("assistant", full)
 
+            final = response
             if self.mode != "plan":
-                self._process_ai_response(full)
+                for rnd in range(MAX_TOOL_ROUNDS):
+                    results = self._process_ai_response(final)
+                    if not results:
+                        break
 
+                    self.memory.add("tool", self._format_tool_results(results))
+
+                    c("AI", "AI> ")
+                    final = ""
+                    try:
+                        for token in self.bridge.stream(self.memory.get_context()):
+                            sys.stdout.write(token)
+                            sys.stdout.flush()
+                            final += token
+                    except Exception as e:
+                        cl("ERR", f"\n[API Error] {e}")
+                        break
+                    print()
+            else:
+                self._process_ai_response(response)
+
+            self.memory.add("assistant", final)
             self.memory.cleanup()
 
 

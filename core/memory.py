@@ -19,7 +19,8 @@ class MemoryManager:
         self.context.append({"role": role, "content": content})
         self._msg_count += 1
         sys_idx = 1 if len(self.context) > 1 and self.context[0]["role"] == "system" else 0
-        max_msgs = self.max_pairs * 2
+        tool_msgs = sum(1 for m in self.context[sys_idx:] if m["role"] == "tool")
+        max_msgs = self.max_pairs * 2 + tool_msgs
         if len(self.context) - sys_idx > max_msgs:
             keep = self.context[:sys_idx]
             keep += self.context[-(max_msgs):]
