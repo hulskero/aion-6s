@@ -7,7 +7,10 @@ import json
 import re
 import gc
 import time
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 import itertools
 import threading
 try:
@@ -50,11 +53,13 @@ def audit_log(entry):
     """Thread-safe audit logging with file locking."""
     try:
         with open(AUDIT_LOG, "a") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            if fcntl:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
                 f.write(json.dumps(entry) + "\n")
             finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                if fcntl:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except Exception:
         pass  # Fail gracefully on iOS filesystem restrictions
 
