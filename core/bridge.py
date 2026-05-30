@@ -10,7 +10,11 @@ class APIError(Exception):
 
 
 class Bridge:
-    __slots__ = ["api_key", "base_url", "model", "max_tokens", "temperature", "request_timeout", "_retry_max", "_last_latency"]
+    __slots__ = [
+        "api_key", "base_url", "model", "max_tokens", "temperature",
+        "request_timeout", "rate_limit", "_retry_max", "_last_latency",
+        "_call_timestamps",
+    ]
 
     def __init__(self, config):
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
@@ -19,17 +23,31 @@ class Bridge:
         self.max_tokens = config.get("max_tokens", 2048)
         self.temperature = config.get("temperature", 0.7)
         self.request_timeout = config.get("request_timeout", 120)
+        self.rate_limit = config.get("rate_limit", 30)
         self._retry_max = 3
         self._last_latency = 0
+        self._call_timestamps = []
 
     def update_config(self, config):
-        """Update configuration (used when model changes via /model command)"""
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
         self.base_url = config.get("base_url", "https://integrate.api.nvidia.com/v1")
         self.model = config.get("model", "deepseek-ai/deepseek-v4-flash")
         self.max_tokens = config.get("max_tokens", 2048)
         self.temperature = config.get("temperature", 0.7)
         self.request_timeout = config.get("request_timeout", 120)
+        self.rate_limit = config.get("rate_limit", 30)
+
+    def _enforce_rate_limit(self):
+        now = time.time()
+        window = 60
+        cutoff = now - window
+        self._call_timestamps = [t for t in self._call_timestamps if t > cutoff]
+        if len(self._call_timestamps) >= self.rate_limit:
+            oldest = self._call_timestamps[0]
+            wait = window - (now - oldest)
+            if wait > 0:
+                time.sleep(wait)
+        self._call_timestamps.append(time.time())
 
     def _post(self, messages, stream=False):
         if not self.api_key:
@@ -62,14 +80,14 @@ class Bridge:
             raise APIError(f"Network: {e.reason}")
 
     def _retry_post(self, messages, stream=False):
-        """POST with exponential backoff retry for mobile network resilience"""
+        self._enforce_rate_limit()
         for attempt in range(self._retry_max):
             try:
                 return self._post(messages, stream)
             except APIError as e:
                 if attempt == self._retry_max - 1:
                     raise
-                wait = (attempt + 1) * 2  # 2s, 4s, 6s backoff
+                wait = (attempt + 1) * 2
                 time.sleep(wait)
 
     def chat(self, messages):

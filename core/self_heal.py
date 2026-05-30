@@ -1,5 +1,23 @@
 import json
 import os
+import re
+
+
+SENSITIVE_PATTERNS = [
+    (r'/var/mobile/[A-Za-z0-9\-]+/', '/var/mobile/***/'),
+    (r'/Users/\w+/', '/Users/***/'),
+    (r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', '***.***.***.***'),
+    (r'nvapi-[A-Za-z0-9]+', 'nvapi-***'),
+    (r'sk-[A-Za-z0-9]+', 'sk-***'),
+    (r'ghp_[A-Za-z0-9]+', 'ghp_***'),
+    (r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '***@***'),
+]
+
+
+def sanitize(text):
+    for pat, replacement in SENSITIVE_PATTERNS:
+        text = re.sub(pat, replacement, text)
+    return text
 
 
 class SelfHeal:
@@ -37,11 +55,13 @@ class SelfHeal:
             if not cached.startswith("FAIL"):
                 return cached
 
+        sanitized_err = sanitize(stderr)
+
         for attempt in range(self.max_tries):
             prompt = f"""Command failed. Fix it.
 
 CMD: {cmd}
-ERR: {stderr}
+ERR: {sanitized_err}
 
 Output ONLY the fixed shell command, nothing else.
 If impossible, output: FAIL <reason>"""

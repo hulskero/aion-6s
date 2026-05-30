@@ -6,6 +6,7 @@ import sys
 import json
 import re
 import gc
+import time
 
 
 ANSI = {
@@ -26,6 +27,8 @@ MODES = {
     "auto": "Full autonomous. Everything executes, guardrails still block nukes.",
 }
 
+AUDIT_LOG = os.path.join(os.path.dirname(__file__), "aion-audit.log")
+
 
 def c(color, text):
     sys.stdout.write(f"{ANSI[color]}{text}{ANSI['RST']}")
@@ -34,6 +37,14 @@ def c(color, text):
 
 def cl(color, text):
     print(f"{ANSI[color]}{text}{ANSI['RST']}")
+
+
+def audit_log(entry):
+    try:
+        with open(AUDIT_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
 
 
 SESSION_DIR = os.path.join(os.path.dirname(__file__), "sessions")
@@ -85,6 +96,12 @@ class AION:
         if tout > 300:
             config["request_timeout"] = 300
 
+        rl = config.get("rate_limit", 30)
+        if not isinstance(rl, int) or rl < 1:
+            config["rate_limit"] = 30
+        if rl > 120:
+            config["rate_limit"] = 120
+
         return config
 
     def _load_or_create_config(self):
@@ -97,7 +114,8 @@ class AION:
             "max_heal_attempts": 3,
             "temperature": 0.7,
             "max_tokens": 2048,
-            "request_timeout": 120
+            "request_timeout": 120,
+            "rate_limit": 30
         }
 
         while True:
@@ -154,6 +172,8 @@ class AION:
         from core.guardrails import check, confirm, reset_confirm
         from plugins import load_plugins
 
+        self._check_config_security()
+
         self.bridge = Bridge(self.config)
         self.jailbreak = Jailbreak(self.config.get("jailbreak_mode", "auto"))
         self.memory = MemoryManager(self.config.get("max_context_pairs", 5))
@@ -161,6 +181,17 @@ class AION:
         self.plugins = load_plugins(os.path.join(os.path.dirname(__file__), "plugins"))
         self.system_prompt = self._build_prompt()
         self.memory.set_system(self.system_prompt)
+
+    def _check_config_security(self):
+        if os.environ.get("NVIDIA_API_KEY"):
+            return
+        if os.path.exists(self.config_path):
+            mode = oct(os.stat(self.config_path).st_mode)[-3:]
+            if mode != "600" and mode != "640":
+                cl("WARN", f"  [SECURITY] config.json permissions: {mode} (recommend: 600)")
+        if self.config.get("api_key"):
+            cl("WARN", "  [SECURITY] API key stored in plaintext config.json")
+            cl("WARN", "  [SECURITY] Safer: set NVIDIA_API_KEY env var instead")
 
     def _build_prompt(self):
         plugin_list = "\n".join(
@@ -183,6 +214,13 @@ MODES (user switches with /plan, /build, /auto, /chat):
   auto  — you execute immediately, guardrails block destruction
   chat  — normal chat, commands execute with warnings
 
+SECURITY RULES (strictly follow):
+- NEVER generate @cmd with: rm -rf, dd, mkfs, reboot, poweroff, halt, chroot, sudo.
+- NEVER pipe downloads (curl/wget) directly to shell (sh, bash, python).
+- NEVER use backticks or $() with dangerous commands.
+- When in doubt, suggest a safe alternative and ask the user.
+- Commands over 500 characters are blocked.
+
 RULES:
 - Be concise.
 - When a command fails, analyze the error and suggest a fix.
@@ -193,9 +231,12 @@ RULES:
     def _exec_cmd(self, cmd):
         from core.guardrails import check, confirm, reset_confirm
 
+        t0 = time.time()
+
         blocked, is_dest = check(cmd)
         if blocked:
             cl("ERR", f"  {blocked}")
+            audit_log({"t": time.time(), "action": "blocked", "cmd": cmd, "reason": blocked})
             return None
 
         if self.mode == "plan":
@@ -206,6 +247,7 @@ RULES:
             cl("WARN", f"  [DANGEROUS] $ {cmd}")
             if not confirm(cmd):
                 cl("WARN", "  Skipped.")
+                audit_log({"t": time.time(), "action": "skipped", "cmd": cmd, "reason": "user declined"})
                 return None
 
         self.cmd_history.append(cmd)
@@ -214,6 +256,8 @@ RULES:
 
         cl("CMD", f"\n  $ {cmd}")
         result = self.jailbreak.run(cmd)
+
+        duration = time.time() - t0
 
         if result and result["stdout"]:
             print(result["stdout"].rstrip())
@@ -237,6 +281,13 @@ RULES:
                     elif healed and healed.get("stderr"):
                         cl("ERR", healed["stderr"].rstrip())
 
+        success = result.get("success", False) if result else False
+        audit_log({
+            "t": time.time(), "action": "exec",
+            "cmd": cmd, "mode": self.mode,
+            "success": success, "duration": round(duration, 2),
+        })
+
         return result
 
     def _exec_plugin(self, name, args=""):
@@ -252,6 +303,13 @@ RULES:
         self.jailbreak.run_shortcut(name, inp)
 
     def _process_ai_response(self, text):
+        from core.guardrails import check_ai_response
+        blocked = check_ai_response(text)
+        if blocked:
+            cl("ERR", f"  {blocked}")
+            audit_log({"t": time.time(), "action": "ai_blocked", "reason": blocked})
+            return
+
         for match in re.finditer(r'@(cmd|plugin|shortcut)\s+(.+)', text, re.MULTILINE):
             kind = match.group(1)
             rest = match.group(2).strip().strip('"').strip("'")
@@ -278,6 +336,22 @@ RULES:
                 cl("SYS", f"  {MODES[mode]}")
             else:
                 cl("ERR", f"Unknown mode. Available: {list(MODES.keys())}")
+
+        elif cmd == "/log":
+            if os.path.exists(AUDIT_LOG):
+                with open(AUDIT_LOG) as f:
+                    lines = f.readlines()
+                last = lines[-min(len(lines), 15):]
+                cl("SYS", f"Last {len(last)} audit entries:")
+                for l in last:
+                    try:
+                        e = json.loads(l)
+                        ts = time.strftime("%H:%M:%S", time.localtime(e["t"]))
+                        cl("SYS", f"  {ts} {e.get('action','?'):>8} | {e.get('cmd','')[:50]}")
+                    except Exception:
+                        pass
+            else:
+                cl("SYS", "No audit log yet.")
 
         elif cmd == "/plugins":
             cl("SYS", f"Plugins ({len(self.plugins)}):")
@@ -311,6 +385,7 @@ RULES:
   /load [name]       Load session
   /reload            Reload plugins
   /status            System status
+  /log               Show last audit log entries
   !! / !N            Repeat last / Nth command
   /help              This message""")
         elif cmd == "/reload":

@@ -1,19 +1,35 @@
 import re
 
+MAX_CMD_LEN = 500
+
 BLOCKED = [
-    (r'\brm\s+-rf\s+/\s*$', "rm -rf / — nuking the system"),
-    (r'\brm\s+-rf\s+/\s+\w', "rm -rf / — nuking the system"),
-    (r'\bdd\s+if=.*\s+of=/dev/', "dd writing to raw device"),
+    (r'\brm\s+-rf\s+/\s*$', "rm -rf /"),
+    (r'\brm\s+-rf\s+/\s+\w', "rm -rf / with args"),
+    (r'\brm\s+-rf\s+\~', "rm -rf ~ (home)"),
+    (r'\brm\s+-rf\s+\$HOME', "rm -rf $HOME"),
+    (r'\brm\s+-rf\s+/\*', "rm -rf /* (glob root)"),
+    (r'\bdd\s+if=.*\s+of=/dev/', "dd to raw device"),
     (r':\(\)\s*\{', "fork bomb"),
-    (r'\bmkfs\..*\s+/dev/', "mkfs on a device"),
-    (r'\bfdisk\s+/dev/', "fdisk on a device"),
+    (r'\bmkfs\..*\s+/dev/', "mkfs on device"),
+    (r'\bfdisk\s+/dev/', "fdisk on device"),
+    (r'>\s*/dev/[hs]d', "write to block device"),
+    (r'>\s*/dev/r?\w+', "write to /dev/ device"),
     (r'\bchmod\s+777\s+/', "chmod 777 /"),
-    (r'\bchown\s+-R\s+.*\s+/$', "chown -R /"),
-    (r'>\s*/dev/[hs]d', "write to raw block device"),
-    (r'\bshutdown\s+-[rhPH]', "system shutdown/reboot"),
+    (r'\bchown\s+-R\s+.*\s+/\s*$', "chown -R /"),
+    (r'\bshutdown\s+-[rhPH]', "shutdown/reboot"),
     (r'\breboot\s*$', "reboot"),
     (r'\bpoweroff\s*$', "poweroff"),
     (r'\bhalt\s*$', "halt"),
+    (r'\binit\s+0\b', "init 0 (shutdown)"),
+    (r'\binit\s+6\b', "init 6 (reboot)"),
+    (r'\bsu\s+[-\s]', "switch user"),
+    (r'\bsudo\s+', "sudo (not available)"),
+    (r'\bchroot\s+', "chroot"),
+    (r'\bpasswd\s+', "change password"),
+    (r'(curl|wget)\s+.*\|\s*(sh|bash|zsh|python)', "pipe download to shell"),
+    (r'(curl|wget)\s+.*-O\s+.*&&\s*(sh|bash|python)', "download and execute"),
+    (r'`.*(rm|dd|mkfs|reboot|shutdown).*`', "backtick with dangerous cmd"),
+    (r'\$\s*\((rm|dd|mkfs|reboot|shutdown)', "subshell with dangerous cmd"),
 ]
 
 DESTRUCTIVE = [
@@ -30,8 +46,9 @@ DESTRUCTIVE = [
     r'\bdpkg\s+-[rP]',
     r'\bsystemctl\s+(stop|disable|mask)',
     r'\blaunchctl\s+unload',
-    r'\bpasswd\s+',
     r'\buser(del|mod)\s+',
+    r'\bpasswd\s+',
+    r'\bsudo\s+',
 ]
 
 CONFIRM_CMD = input if __name__ != "__main__" else input
@@ -40,11 +57,25 @@ _proactive_yes = False
 
 def check(cmd):
     """Returns (blocked_reason, is_destructive)"""
+    if len(cmd) > MAX_CMD_LEN:
+        return (f"[BLOCKED] Command exceeds {MAX_CMD_LEN} chars ({len(cmd)})", False)
+
     for pat, reason in BLOCKED:
-        if re.search(pat, cmd):
+        if re.search(pat, cmd, re.IGNORECASE):
             return (f"[BLOCKED] {reason}", False)
-    is_dest = any(re.search(p, cmd) for p in DESTRUCTIVE)
+    is_dest = any(re.search(p, cmd, re.IGNORECASE) for p in DESTRUCTIVE)
     return (None, is_dest)
+
+
+def check_ai_response(text):
+    """Pre-check AI response for dangerous commands before execution"""
+    dangerous_keywords = ["rm -rf", "dd if=", ":(){", "mkfs.", "reboot", "poweroff", "halt"]
+    for match in re.finditer(r'@cmd\s+(.+)', text):
+        cmd = match.group(1).strip()
+        for kw in dangerous_keywords:
+            if kw in cmd.lower():
+                return f"AI response blocked: contains '{kw}'"
+    return None
 
 
 def confirm(cmd):
