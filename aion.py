@@ -7,6 +7,7 @@ import json
 import re
 import gc
 import time
+import fcntl
 
 
 ANSI = {
@@ -40,11 +41,16 @@ def cl(color, text):
 
 
 def audit_log(entry):
+    """Thread-safe audit logging with file locking."""
     try:
         with open(AUDIT_LOG, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.write(json.dumps(entry) + "\n")
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except Exception:
-        pass
+        pass  # Fail gracefully on iOS filesystem restrictions
 
 
 SESSION_DIR = os.path.join(os.path.dirname(__file__), "sessions")
@@ -101,6 +107,14 @@ class AION:
             config["rate_limit"] = 30
         if rl > 120:
             config["rate_limit"] = 120
+
+        # Validate base_url to prevent SSRF
+        if "base_url" in config:
+            url = config["base_url"]
+            if not isinstance(url, str) or not url.startswith("https://"):
+                config["base_url"] = "https://integrate.api.nvidia.com/v1"
+            elif "integrate.api.nvidia.com" not in url and "api.anthropic.com" not in url:
+                cl("WARN", f"  [SECURITY] Unusual base_url: {url[:50]}")
 
         return config
 
@@ -161,8 +175,18 @@ class AION:
         return config
 
     def _save_config(self, config):
-        with open(self.config_path, "w") as f:
-            json.dump(config, f, indent=2)
+        """Atomic config save with file locking."""
+        tmp_path = self.config_path + ".tmp"
+        try:
+            with open(tmp_path, "w") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    json.dump(config, f, indent=2)
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            os.replace(tmp_path, self.config_path)
+        except Exception as e:
+            cl("ERR", f"Config save error: {e}")
 
     def _init_components(self):
         from core.bridge import Bridge

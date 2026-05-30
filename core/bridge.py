@@ -85,6 +85,11 @@ class Bridge:
             try:
                 return self._post(messages, stream)
             except APIError as e:
+                # Check for rate limit (429) and wait longer
+                if "429" in str(e) and attempt < self._retry_max - 1:
+                    wait = (attempt + 1) * 10  # Longer wait for rate limiting
+                    time.sleep(wait)
+                    continue
                 if attempt == self._retry_max - 1:
                     raise
                 wait = (attempt + 1) * 2

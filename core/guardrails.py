@@ -3,33 +3,40 @@ import re
 MAX_CMD_LEN = 500
 
 BLOCKED = [
+    # Root/system destruction
     (r'\brm\s+-rf\s+/\s*$', "rm -rf /"),
-    (r'\brm\s+-rf\s+/\s+\w', "rm -rf / with args"),
-    (r'\brm\s+-rf\s+\~', "rm -rf ~ (home)"),
-    (r'\brm\s+-rf\s+\$HOME', "rm -rf $HOME"),
+    (r'\brm\s+-rf\s+/\s+\S', "rm -rf / with args"),
+    (r'\brm\s+-rf\s+\~/?\s*$', "rm -rf ~ (home)"),
+    (r'\brm\s+-rf\s+\$HOME', "rm -rf \$HOME"),
     (r'\brm\s+-rf\s+/\*', "rm -rf /* (glob root)"),
-    (r'\bdd\s+if=.*\s+of=/dev/', "dd to raw device"),
-    (r':\(\)\s*\{', "fork bomb"),
-    (r'\bmkfs\..*\s+/dev/', "mkfs on device"),
+    # Disk/block device operations
+    (r'\bdd\s+if=.*of=/dev/', "dd to raw device"),
+    (r'\bmkfs\.\w+\s+/dev/', "mkfs on device"),
     (r'\bfdisk\s+/dev/', "fdisk on device"),
     (r'>\s*/dev/[hs]d', "write to block device"),
     (r'>\s*/dev/r?\w+', "write to /dev/ device"),
+    # Privilege escalation
     (r'\bchmod\s+777\s+/', "chmod 777 /"),
-    (r'\bchown\s+-R\s+.*\s+/\s*$', "chown -R /"),
+    (r'\bchown\s+-R\s+\S+\s+/\s*$', "chown -R /"),
+    (r'\bsu\s+[-\s]', "switch user"),
+    (r'\bsudo\s+', "sudo (not available)"),
+    (r'\bpasswd\s+', "change password"),
+    (r'\bchroot\s+', "chroot"),
+    # System shutdown/reboot
     (r'\bshutdown\s+-[rhPH]', "shutdown/reboot"),
     (r'\breboot\s*$', "reboot"),
     (r'\bpoweroff\s*$', "poweroff"),
     (r'\bhalt\s*$', "halt"),
-    (r'\binit\s+0\b', "init 0 (shutdown)"),
-    (r'\binit\s+6\b', "init 6 (reboot)"),
-    (r'\bsu\s+[-\s]', "switch user"),
-    (r'\bsudo\s+', "sudo (not available)"),
-    (r'\bchroot\s+', "chroot"),
-    (r'\bpasswd\s+', "change password"),
-    (r'(curl|wget)\s+.*\|\s*(sh|bash|zsh|python)', "pipe download to shell"),
-    (r'(curl|wget)\s+.*-O\s+.*&&\s*(sh|bash|python)', "download and execute"),
-    (r'`.*(rm|dd|mkfs|reboot|shutdown).*`', "backtick with dangerous cmd"),
-    (r'\$\s*\((rm|dd|mkfs|reboot|shutdown)', "subshell with dangerous cmd"),
+    (r'\binit\s+[06]\b', "init 0/6 (shutdown)"),
+    # Fork bomb
+    (r':\(\)\s*\{', "fork bomb"),
+    # Remote code execution patterns
+    (r'(curl|wget)\s+.*\|\s*(?:sh|bash|zsh|python|python3|perl|ruby)', "pipe download to shell"),
+    (r'(curl|wget)\s+.*-O\s+.*&&\s*(?:sh|bash|python|python3|perl|ruby)', "download and execute"),
+    (r'`.*(?:rm|dd|mkfs|reboot|shutdown|chmod|chown|passwd|su|sudo).*?`', "backtick with dangerous cmd"),
+    (r'\$\s*\((?:rm|dd|mkfs|reboot|shutdown|chmod|chown|passwd|su|sudo)', "subshell with dangerous cmd"),
+    (r'\$\(.*\)', "subshell execution (blocked)"),
+    (r'`.*`', "backtick execution (blocked)"),
 ]
 
 DESTRUCTIVE = [

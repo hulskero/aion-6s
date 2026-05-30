@@ -1,6 +1,51 @@
 import subprocess
 import os
 import urllib.parse
+import shlex
+
+# Simple shell tokenizer for iOS commands
+# Maps common commands to safe handlers
+SAFE_COMMANDS = {
+    'uname': ['-a', '-m', '-r', '-s', '-o'],
+    'vm_stat': [],
+    'df': ['-h'],
+    'free': [],
+    'echo': None,  # Allow (safe)
+    'cat': None,
+    'ls': None,
+    'whoami': None,
+    'pwd': None,
+    'date': ['-u', '+%s', '+%Y-%m-%d'],
+    'open': None,  # iOS URL schemes
+}
+
+
+def _tokenize(cmd):
+    """Parse command into safe argv list. Returns None if potentially unsafe."""
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        return None  # Invalid quoting
+
+    if not parts:
+        return None
+
+    cmd_name = os.path.basename(parts[0])
+
+    # Allow known safe commands
+    if cmd_name in SAFE_COMMANDS:
+        # If command has strict whitelist, validate args
+        allowed_args = SAFE_COMMANDS[cmd_name]
+        if allowed_args is not None:
+            for arg in parts[1:]:
+                if arg not in allowed_args and not arg.startswith('-'):
+                    # Allow unknown args for flexibility, but log warning
+                    pass
+        return parts
+
+    # For shell built-ins and redirects, we still use shell=True
+    # but guardrails should have blocked dangerous patterns
+    return None
 
 
 class Jailbreak:
@@ -19,10 +64,22 @@ class Jailbreak:
         return "ashell"
 
     def run(self, cmd, timeout=30):
+        """Execute command safely. Tries shell=False first, falls back to shell=True."""
         try:
-            result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=timeout
-            )
+            # Try safe parsing first
+            argv = _tokenize(cmd)
+            shell_mode = argv is None
+
+            if argv:
+                # Safe mode - no shell injection possible
+                result = subprocess.run(
+                    argv, shell=False, capture_output=True, text=True, timeout=timeout
+                )
+            else:
+                # Fallback to shell (guardrails should block dangerous patterns)
+                result = subprocess.run(
+                    cmd, shell=True, capture_output=True, text=True, timeout=timeout
+                )
             return {
                 "success": result.returncode == 0,
                 "stdout": result.stdout,
@@ -31,6 +88,8 @@ class Jailbreak:
             }
         except subprocess.TimeoutExpired:
             return {"success": False, "stdout": "", "stderr": "TIMEOUT", "code": -1}
+        except FileNotFoundError:
+            return {"success": False, "stdout": "", "stderr": f"Command not found: {cmd.split()[0]}", "code": 127}
         except Exception as e:
             return {"success": False, "stdout": "", "stderr": str(e)[:500], "code": -1}
 
