@@ -8,6 +8,10 @@ import re
 import gc
 import time
 import fcntl
+try:
+    import readline
+except ImportError:
+    pass
 
 
 ANSI = {
@@ -262,7 +266,7 @@ RULES:
 - In /plan mode: output numbered steps using @cmd, they won't run.
 - In /build mode: output @cmd and explain each step."""
 
-    def _exec_cmd(self, cmd):
+    def _exec_cmd(self, cmd, allow_heal=True):
         from core.guardrails import check, confirm, reset_confirm
 
         t0 = time.time()
@@ -298,7 +302,7 @@ RULES:
         if result and result["stderr"]:
             cl("ERR", result["stderr"].rstrip())
 
-        if result and not result["success"] and result["stderr"]:
+        if result and not result["success"] and result["stderr"] and allow_heal:
             cl("WARN", "  [healing...]")
             fix = self.healer.heal(cmd, result["stderr"])
             if fix and fix != cmd:
@@ -327,19 +331,24 @@ RULES:
     def _exec_plugin(self, name, args=""):
         if name in self.plugins:
             cl("SYS", f"  [plugin] {name} {args}")
-            output = self.plugins[name]["run"](args)
-            if output:
-                print(output)
-            return output or ""
+            try:
+                output = self.plugins[name]["run"](args)
+                if output:
+                    print(output)
+                return {"success": True, "output": output or ""}
+            except Exception as e:
+                msg = f"Plugin error: {e}"
+                cl("ERR", f"  {msg}")
+                return {"success": False, "output": msg}
         msg = f"Plugin '{name}' not found. Available: {list(self.plugins.keys())}"
         cl("ERR", f"  {msg}")
-        return msg
+        return {"success": False, "output": msg}
 
     def _exec_shortcut(self, name, inp=None):
         cl("SYS", f"  [shortcut] {name}")
         self.jailbreak.run_shortcut(name, inp)
 
-    def _process_ai_response(self, text):
+    def _process_ai_response(self, text, heal=True):
         from core.guardrails import check_ai_response
         blocked = check_ai_response(text)
         if blocked:
@@ -353,16 +362,16 @@ RULES:
             rest = match.group(2).strip().strip('"').strip("'")
             result = {"kind": kind, "input": rest, "stdout": "", "success": False}
             if kind == "cmd":
-                cmd_res = self._exec_cmd(rest)
+                cmd_res = self._exec_cmd(rest, allow_heal=heal)
                 if cmd_res:
                     result["stdout"] = (cmd_res.get("stdout") or "") + (cmd_res.get("stderr") or "")
                     result["success"] = cmd_res.get("success", False)
                     result["exit_code"] = cmd_res.get("exit_code", 0)
             elif kind == "plugin":
                 parts = rest.split(None, 1)
-                output = self._exec_plugin(parts[0], parts[1] if len(parts) > 1 else "")
-                result["stdout"] = output
-                result["success"] = True
+                plugin_res = self._exec_plugin(parts[0], parts[1] if len(parts) > 1 else "")
+                result["stdout"] = plugin_res["output"]
+                result["success"] = plugin_res["success"]
             elif kind == "shortcut":
                 parts = rest.split(None, 1)
                 self._exec_shortcut(parts[0], parts[1] if len(parts) > 1 else None)
@@ -378,15 +387,18 @@ RULES:
             if kind == "cmd":
                 status = "OK" if r["success"] else f"FAILED (exit {r.get('exit_code', '?')})"
                 lines.append(f"[cmd] $ {inp}  [{status}]")
-                if r.get("stdout"):
-                    lines.append(r["stdout"].rstrip())
+                out = (r.get("stdout") or "").rstrip()
+                if out:
+                    lines.append(out[:2000])
             elif kind == "plugin":
                 lines.append(f"[plugin] {inp}")
-                if r.get("stdout"):
-                    lines.append(r["stdout"].rstrip())
+                out = (r.get("stdout") or "").rstrip()
+                if out:
+                    lines.append(out[:2000])
             elif kind == "shortcut":
                 lines.append(f"[shortcut] {inp}")
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        return result[:5000] if len(result) > 5000 else result
 
     def _handle_special(self, line):
         from core.guardrails import reset_confirm
@@ -452,6 +464,7 @@ RULES:
   /reload            Reload plugins
   /status            System status
   /log               Show last audit log entries
+  /update            Download latest files from GitHub
   !! / !N            Repeat last / Nth command
   /help              This message""")
         elif cmd == "/reload":
@@ -459,6 +472,29 @@ RULES:
             self.plugins = reload_plugins(os.path.join(os.path.dirname(__file__), "plugins"))
             self.system_prompt = self._build_prompt()
             cl("SYS", f"Plugins reloaded. {len(self.plugins)} active.")
+
+        elif cmd == "/update":
+            cl("SYS", "Updating AION-6S from GitHub...")
+            files = [
+                "aion.py", "config.example.json",
+                "core/__init__.py", "core/bridge.py", "core/jailbreak.py",
+                "core/memory.py", "core/guardrails.py", "core/self_heal.py",
+                "plugins/__init__.py", "plugins/system_tools.py", "plugins/nfc_manager.py",
+                "plugins/battery.py", "plugins/location.py", "plugins/webfetch.py",
+                "plugins/weather.py",
+            ]
+            base_url = "https://raw.githubusercontent.com/hulskero/aion-6s/main/"
+            import subprocess
+            for f in files:
+                cl("SYS", f"  {f}")
+                r = subprocess.run(
+                    ["curl", "-sL", base_url + f, "-o", f],
+                    timeout=30
+                )
+                if r.returncode != 0:
+                    cl("ERR", f"  failed: {f}")
+            cl("SYS", "Update done. Restart with: python3 aion.py")
+            sys.exit(0)
 
         elif cmd == "/status":
             import time
@@ -527,6 +563,40 @@ RULES:
         else:
             cl("ERR", f"Unknown: {cmd}")
 
+    def _stream_with_spinner(self, label="AI"):
+        """Stream AI response with ⏳ thinking spinner. Returns full response text."""
+        return self._stream(label)
+
+    def _stream(self, label="AI"):
+        """Stream from API showing spinner until first token, then stream tokens."""
+        sys.stdout.write(f"\r\033[K⏳ Thinking...")
+        sys.stdout.flush()
+        text = ""
+        try:
+            first = True
+            for token in self.bridge.stream(self.memory.get_context()):
+                if first:
+                    sys.stdout.write(f"\r\033[K{ANSI[label]}{label}>{ANSI['RST']} ")
+                    first = False
+                sys.stdout.write(token)
+                sys.stdout.flush()
+                text += token
+        except Exception as e:
+            cl("ERR", f"\n[API Error] {e}")
+            return None
+        return text
+
+    def _show_stats(self, prompt_chars, completion_chars):
+        usage = self.bridge.get_usage()
+        if usage:
+            prompt = usage.get("prompt_tokens", prompt_chars)
+            completion = usage.get("completion_tokens", completion_chars)
+        else:
+            prompt = f"{prompt_chars}c"
+            completion = f"{completion_chars}c"
+        latency = getattr(self.bridge, "_last_latency", 0)
+        cl("SYS", f"  ↑{prompt} ↓{completion} | {latency:.1f}s | {self.config['model']}")
+
     def run(self):
         MAX_TOOL_ROUNDS = 5
         cl("SYS", f"{ANSI['BOLD']}AION-6S{ANSI['RST']} ready  |  {len(self.plugins)} plugin(s)  |  {self.config['model']}")
@@ -567,41 +637,30 @@ RULES:
 
             self.memory.add("user", line)
 
-            c("AI", "AI> ")
-            response = ""
-            try:
-                for token in self.bridge.stream(self.memory.get_context()):
-                    sys.stdout.write(token)
-                    sys.stdout.flush()
-                    response += token
-            except Exception as e:
-                cl("ERR", f"\n[API Error] {e}")
+            response = self._stream()
+            if response is None:
                 continue
             print()
-
             final = response
+
             if self.mode != "plan":
                 for rnd in range(MAX_TOOL_ROUNDS):
-                    results = self._process_ai_response(final)
+                    results = self._process_ai_response(final, heal=False)
                     if not results:
                         break
 
                     self.memory.add("tool", self._format_tool_results(results))
 
-                    c("AI", "AI> ")
-                    final = ""
-                    try:
-                        for token in self.bridge.stream(self.memory.get_context()):
-                            sys.stdout.write(token)
-                            sys.stdout.flush()
-                            final += token
-                    except Exception as e:
-                        cl("ERR", f"\n[API Error] {e}")
+                    next_resp = self._stream()
+                    if next_resp is None:
                         break
                     print()
+                    final = next_resp
             else:
-                self._process_ai_response(response)
+                self._process_ai_response(response, heal=False)
 
+            prompt_chars = sum(len(m.get("content", "")) for m in self.memory.get_context())
+            self._show_stats(prompt_chars, len(final))
             self.memory.add("assistant", final)
             self.memory.cleanup()
 

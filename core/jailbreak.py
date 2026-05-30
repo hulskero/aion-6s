@@ -6,17 +6,32 @@ import shlex
 # Simple shell tokenizer for iOS commands
 # Maps common commands to safe handlers
 SAFE_COMMANDS = {
-    'uname': ['-a', '-m', '-r', '-s', '-o'],
-    'vm_stat': [],
-    'df': ['-h'],
-    'free': [],
-    'echo': None,  # Allow (safe)
-    'cat': None,
-    'ls': None,
-    'whoami': None,
-    'pwd': None,
-    'date': ['-u', '+%s', '+%Y-%m-%d'],
-    'open': None,  # iOS URL schemes
+    # System info
+    'uname': None, 'vm_stat': None, 'df': None, 'free': None,
+    'sysctl': None, 'sw_vers': None, 'system_profiler': None,
+    'hostname': None, 'id': None, 'whoami': None, 'pwd': None,
+    'date': None, 'uptime': None,
+    # Network
+    'curl': None, 'ping': None, 'nslookup': None, 'dig': None,
+    'ifconfig': None, 'netstat': None, 'route': None,
+    'scp': None, 'ssh': None, 'nmap': None,
+    # Filesystem
+    'ls': None, 'cat': None, 'echo': None, 'head': None, 'tail': None,
+    'wc': None, 'sort': None, 'grep': None, 'awk': None, 'sed': None,
+    'cp': None, 'mv': None, 'mkdir': None, 'rm': None, 'touch': None,
+    'chmod': None, 'chown': None,
+    # iOS / jailbreak
+    'pmset': None, 'open': None,
+    # Package management
+    'pkg': None,
+    # Scripting
+    'python3': None, 'python': None,
+    # Editors
+    'vim': None, 'pico': None, 'ed': None,
+    # Process
+    'ps': None, 'kill': None, 'pkill': None,
+    # Disk
+    'diskutil': None, 'mount': None,
 }
 
 

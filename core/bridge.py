@@ -105,6 +105,7 @@ class Bridge:
     def stream(self, messages):
         t0 = time.time()
         response = self._retry_post(messages, stream=True)
+        self._last_usage = None
         for line_bytes in response:
             line = line_bytes.decode("utf-8").strip()
             if not line:
@@ -114,6 +115,8 @@ class Bridge:
             if line.startswith("data: "):
                 try:
                     chunk = json.loads(line[6:])
+                    if "usage" in chunk:
+                        self._last_usage = chunk["usage"]
                     delta = chunk["choices"][0]["delta"]
                     content = delta.get("content")
                     if content is not None:
@@ -121,3 +124,6 @@ class Bridge:
                 except (json.JSONDecodeError, KeyError, IndexError):
                     pass
         self._last_latency = time.time() - t0
+
+    def get_usage(self):
+        return getattr(self, "_last_usage", None)
