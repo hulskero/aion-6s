@@ -8,6 +8,8 @@ import re
 import gc
 import time
 import fcntl
+import itertools
+import threading
 try:
     import readline
 except ImportError:
@@ -58,6 +60,8 @@ def audit_log(entry):
 
 
 SESSION_DIR = os.path.join(os.path.dirname(__file__), "sessions")
+
+PIXEL_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋⠙⠹⠸⠼⠳⠦⠧⠇⠏"
 
 
 class AION:
@@ -563,25 +567,33 @@ RULES:
         else:
             cl("ERR", f"Unknown: {cmd}")
 
-    def _stream_with_spinner(self, label="AI"):
-        """Stream AI response with ⏳ thinking spinner. Returns full response text."""
-        return self._stream(label)
-
     def _stream(self, label="AI"):
-        """Stream from API showing spinner until first token, then stream tokens."""
-        sys.stdout.write(f"\r\033[K⏳ Thinking...")
-        sys.stdout.flush()
+        """Stream AI response with animated braille spinner."""
+        stop = threading.Event()
+        def spin():
+            for char in itertools.cycle(PIXEL_SPINNER):
+                if stop.is_set():
+                    return
+                sys.stdout.write(f"\r\033[K{ANSI['WARN']}{char}{ANSI['RST']} Thinking...")
+                sys.stdout.flush()
+                time.sleep(0.08)
+        t = threading.Thread(target=spin, daemon=True)
+        t.start()
+
         text = ""
         try:
-            first = True
             for token in self.bridge.stream(self.memory.get_context()):
-                if first:
+                if not stop.is_set():
+                    stop.set()
+                    t.join()
                     sys.stdout.write(f"\r\033[K{ANSI[label]}{label}>{ANSI['RST']} ")
-                    first = False
                 sys.stdout.write(token)
                 sys.stdout.flush()
                 text += token
         except Exception as e:
+            if not stop.is_set():
+                stop.set()
+                t.join()
             cl("ERR", f"\n[API Error] {e}")
             return None
         return text
