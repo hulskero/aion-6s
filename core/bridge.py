@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import urllib.request
 import urllib.error
 
@@ -9,13 +10,22 @@ class APIError(Exception):
 
 
 class Bridge:
-    __slots__ = ["api_key", "base_url", "model", "max_tokens", "temperature"]
+    __slots__ = ["api_key", "base_url", "model", "max_tokens", "temperature", "_retry_max"]
 
     def __init__(self, config):
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
         self.base_url = config.get("base_url", "https://integrate.api.nvidia.com/v1")
         self.model = config.get("model", "deepseek-ai/deepseek-v4-flash")
-        self.max_tokens = config.get("max_tokens", 4096)
+        self.max_tokens = config.get("max_tokens", 2048)  # Reduced for iPhone 6s
+        self.temperature = config.get("temperature", 0.7)
+        self._retry_max = 3  # Retry attempts for mobile networks
+
+    def update_config(self, config):
+        """Update configuration (used when model changes via /model command)"""
+        self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
+        self.base_url = config.get("base_url", "https://integrate.api.nvidia.com/v1")
+        self.model = config.get("model", "deepseek-ai/deepseek-v4-flash")
+        self.max_tokens = config.get("max_tokens", 2048)
         self.temperature = config.get("temperature", 0.7)
 
     def _post(self, messages, stream=False):
@@ -53,8 +63,25 @@ class Bridge:
         data = json.loads(response.read())
         return data["choices"][0]["message"]["content"]
 
+    def _retry_post(self, messages, stream=False):
+        """POST with exponential backoff retry for mobile network resilience"""
+        import time
+        for attempt in range(self._retry_max):
+            try:
+                return self._post(messages, stream)
+            except APIError as e:
+                if attempt == self._retry_max - 1:
+                    raise
+                wait = (attempt + 1) * 2  # 2s, 4s, 6s backoff
+                time.sleep(wait)
+
+    def chat(self, messages):
+        response = self._retry_post(messages, stream=False)
+        data = json.loads(response.read())
+        return data["choices"][0]["message"]["content"]
+
     def stream(self, messages):
-        response = self._post(messages, stream=True)
+        response = self._retry_post(messages, stream=True)
         for line_bytes in response:
             line = line_bytes.decode("utf-8").strip()
             if not line:

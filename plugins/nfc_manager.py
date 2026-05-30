@@ -56,8 +56,22 @@ def nfc_write(args=""):
     return "\n".join(lines)
 
 
+def nfc_manager(args=""):
+    """Unified NFC plugin - handles scan and write subcommands"""
+    parts = args.strip().split(None, 1)
+    command = (parts[0] if parts else "scan").lower()
+    data = parts[1] if len(parts) > 1 else ""
+
+    if command == "scan":
+        return nfc_scan(args)
+    elif command == "write":
+        return nfc_write(data)
+    else:
+        return "[NFC] Usage: @plugin nfc_manager [scan|write \"data\"]\n  scan - Scan for NFC tag\n  write \"data\" - Write data to NFC tag"
+
+
 SKILL = {
     "name": "nfc_manager",
     "description": "Scan and write NFC tags via jailbreak tools (rc) or Shortcuts fallback",
-    "run": nfc_scan,
+    "run": nfc_manager,
 }
