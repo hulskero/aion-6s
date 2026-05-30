@@ -1,5 +1,6 @@
 import os
 import sys
+import importlib
 import importlib.util
 
 
@@ -24,3 +25,10 @@ def load_plugins(plugins_dir):
         except Exception as e:
             print(f"  [ERR] plugin {name}: {e}")
     return plugins
+
+
+def reload_plugins(plugins_dir):
+    for mod_name in list(sys.modules.keys()):
+        if "plugins." in mod_name or mod_name == "plugins":
+            del sys.modules[mod_name]
+    return load_plugins(plugins_dir)

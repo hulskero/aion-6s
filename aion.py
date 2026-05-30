@@ -36,17 +36,21 @@ def cl(color, text):
     print(f"{ANSI[color]}{text}{ANSI['RST']}")
 
 
+SESSION_DIR = os.path.join(os.path.dirname(__file__), "sessions")
+
+
 class AION:
     __slots__ = [
         "config", "bridge", "jailbreak", "memory",
         "healer", "plugins", "system_prompt", "mode",
-        "config_path", "is_first_run",
+        "config_path", "cmd_history",
     ]
 
     def __init__(self):
         self.config_path = os.path.join(os.path.dirname(__file__), "config.json")
         self.config = self._load_or_create_config()
         self.mode = "chat"
+        self.cmd_history = []
         self._init_components()
 
     def _validate_config(self, config):
@@ -75,6 +79,12 @@ class AION:
         if config.get("jailbreak_mode") not in ("auto", "newterm", "ashell"):
             config["jailbreak_mode"] = "auto"
 
+        tout = config.get("request_timeout", 120)
+        if not isinstance(tout, (int, float)) or tout < 15:
+            config["request_timeout"] = 120
+        if tout > 300:
+            config["request_timeout"] = 300
+
         return config
 
     def _load_or_create_config(self):
@@ -86,26 +96,27 @@ class AION:
             "max_context_pairs": 5,
             "max_heal_attempts": 3,
             "temperature": 0.7,
-            "max_tokens": 2048
+            "max_tokens": 2048,
+            "request_timeout": 120
         }
 
-        # Try to load existing config
-        if os.path.exists(self.config_path):
-            try:
-                with open(self.config_path) as f:
-                    config = json.load(f)
-                config = self._validate_config(config)
-                # Check if api_key is missing or placeholder
-                if not config.get("api_key") or config.get("api_key", "").startswith("nvapi-zWERU"):
-                    config["api_key"] = self._prompt_api_key()
-                    self._save_config(config)
+        while True:
+            if os.path.exists(self.config_path):
+                try:
+                    with open(self.config_path) as f:
+                        config = json.load(f)
+                    config = self._validate_config(config)
+                    key = config.get("api_key", "")
+                    if not key or len(key) < 40 or key.startswith("nvapi-zWERU"):
+                        config["api_key"] = self._prompt_api_key()
+                        self._save_config(config)
+                    return config
+                except Exception as e:
+                    cl("ERR", f"Config load error: {e}")
+            cl("SYS", "No valid config found. Please configure AION-6S.")
+            config = self._validate_config(self._prompt_config_interactive(default_config))
+            if config.get("api_key"):
                 return config
-            except Exception as e:
-                cl("ERR", f"Config load error: {e}")
-                return self._validate_config(self._prompt_config_interactive(default_config))
-
-        cl("SYS", "First run detected. Please configure AION-6S.")
-        return self._validate_config(self._prompt_config_interactive(default_config))
 
     def _prompt_api_key(self):
         sys.stdout.write(f"{ANSI['SYS']}Enter NVIDIA API key (nvapi-xxx): {ANSI['RST']}")
@@ -197,6 +208,10 @@ RULES:
                 cl("WARN", "  Skipped.")
                 return None
 
+        self.cmd_history.append(cmd)
+        if len(self.cmd_history) > 100:
+            self.cmd_history = self.cmd_history[-50:]
+
         cl("CMD", f"\n  $ {cmd}")
         result = self.jailbreak.run(cmd)
 
@@ -212,12 +227,15 @@ RULES:
                 blocked2, _ = check(fix)
                 if not blocked2:
                     cl("CMD", f"  ! retry: {fix}")
-                    result2 = self.jailbreak.run(fix)
-                    if result2:  # <-- FIX: Check if result2 is not None
-                        if result2.get("stdout"):
-                            print(result2["stdout"].rstrip())
-                        if result2.get("stderr"):
-                            cl("ERR", result2["stderr"].rstrip())
+                    healed = self.jailbreak.run(fix)
+                    if healed and healed["success"]:
+                        result = healed
+                        if healed.get("stdout"):
+                            print(healed["stdout"].rstrip())
+                        if healed.get("stderr"):
+                            cl("ERR", healed["stderr"].rstrip())
+                    elif healed and healed.get("stderr"):
+                        cl("ERR", healed["stderr"].rstrip())
 
         return result
 
@@ -289,7 +307,62 @@ RULES:
   /clear             Reset conversation context
   /heal              Show self-healing history
   /info              System info
+  /save [name]       Save session
+  /load [name]       Load session
+  /reload            Reload plugins
+  /status            System status
+  !! / !N            Repeat last / Nth command
   /help              This message""")
+        elif cmd == "/reload":
+            from plugins import reload_plugins
+            self.plugins = reload_plugins(os.path.join(os.path.dirname(__file__), "plugins"))
+            self.system_prompt = self._build_prompt()
+            cl("SYS", f"Plugins reloaded. {len(self.plugins)} active.")
+
+        elif cmd == "/status":
+            import time
+            ctx = self.memory.get_context()
+            chars = sum(len(m.get("content", "")) for m in ctx)
+            cl("SYS", f"Mode: {self.mode}")
+            cl("SYS", f"Context: {len(ctx)} msgs, ~{chars} chars")
+            cl("SYS", f"Cmd history: {len(self.cmd_history)} entries")
+            cl("SYS", f"Model: {self.config['model']}")
+            if hasattr(self.bridge, '_last_latency'):
+                cl("SYS", f"Last API latency: {self.bridge._last_latency:.1f}s")
+
+        elif cmd.startswith("/save"):
+            parts = cmd.split(None, 1)
+            name = parts[1].strip() if len(parts) > 1 else "default"
+            if not os.path.isdir(SESSION_DIR):
+                os.makedirs(SESSION_DIR)
+            path = os.path.join(SESSION_DIR, f"{name}.json")
+            data = {
+                "mode": self.mode,
+                "config": self.config,
+                "context": self.memory.get_context(),
+                "cmd_history": self.cmd_history[-20:],
+            }
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2)
+            cl("SYS", f"Session saved: {name}")
+
+        elif cmd.startswith("/load"):
+            parts = cmd.split(None, 1)
+            name = parts[1].strip() if len(parts) > 1 else "default"
+            path = os.path.join(SESSION_DIR, f"{name}.json")
+            if not os.path.exists(path):
+                cl("ERR", f"Session '{name}' not found.")
+                return
+            with open(path) as f:
+                data = json.load(f)
+            self.mode = data.get("mode", "chat")
+            self.memory.set_system(self.system_prompt)
+            for msg in data.get("context", []):
+                if msg["role"] != "system":
+                    self.memory.add(msg["role"], msg["content"])
+            self.cmd_history = data.get("cmd_history", [])
+            cl("SYS", f"Session loaded: {name} ({len(data.get('context',[]))} msgs)")
+
         elif cmd.startswith("/model"):
             parts = cmd.split(None, 1)
             if len(parts) == 1:
@@ -324,8 +397,28 @@ RULES:
                 cl("SYS", "\nBye.")
                 break
 
-            if not line.strip():
+            raw = line.strip()
+            if not raw:
                 continue
+
+            if raw == "!!":
+                if self.cmd_history:
+                    raw = self.cmd_history[-1]
+                    cl("SYS", f"Repeating: {ANSI['CMD']}{raw}{ANSI['RST']}")
+                else:
+                    cl("ERR", "No commands in history.")
+                    continue
+            elif raw.startswith("!") and raw[1:].isdigit():
+                idx = int(raw[1:])
+                if 1 <= idx <= len(self.cmd_history):
+                    raw = self.cmd_history[idx - 1]
+                    cl("SYS", f"Repeating #{idx}: {ANSI['CMD']}{raw}{ANSI['RST']}")
+                else:
+                    cl("ERR", f"No command #{idx} in history ({len(self.cmd_history)} total).")
+                    continue
+
+            line = raw
+
             if line.startswith("/"):
                 self._handle_special(line)
                 continue

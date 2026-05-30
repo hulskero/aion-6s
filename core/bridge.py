@@ -10,15 +10,17 @@ class APIError(Exception):
 
 
 class Bridge:
-    __slots__ = ["api_key", "base_url", "model", "max_tokens", "temperature", "_retry_max"]
+    __slots__ = ["api_key", "base_url", "model", "max_tokens", "temperature", "request_timeout", "_retry_max", "_last_latency"]
 
     def __init__(self, config):
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
         self.base_url = config.get("base_url", "https://integrate.api.nvidia.com/v1")
         self.model = config.get("model", "deepseek-ai/deepseek-v4-flash")
-        self.max_tokens = config.get("max_tokens", 2048)  # Reduced for iPhone 6s
+        self.max_tokens = config.get("max_tokens", 2048)
         self.temperature = config.get("temperature", 0.7)
-        self._retry_max = 3  # Retry attempts for mobile networks
+        self.request_timeout = config.get("request_timeout", 120)
+        self._retry_max = 3
+        self._last_latency = 0
 
     def update_config(self, config):
         """Update configuration (used when model changes via /model command)"""
@@ -27,6 +29,7 @@ class Bridge:
         self.model = config.get("model", "deepseek-ai/deepseek-v4-flash")
         self.max_tokens = config.get("max_tokens", 2048)
         self.temperature = config.get("temperature", 0.7)
+        self.request_timeout = config.get("request_timeout", 120)
 
     def _post(self, messages, stream=False):
         if not self.api_key:
@@ -51,21 +54,15 @@ class Bridge:
             data=body, headers=headers, method="POST"
         )
         try:
-            return urllib.request.urlopen(req, timeout=90)
+            return urllib.request.urlopen(req, timeout=self.request_timeout)
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:500]
             raise APIError(f"HTTP {e.code}: {detail}")
         except urllib.error.URLError as e:
             raise APIError(f"Network: {e.reason}")
 
-    def chat(self, messages):
-        response = self._post(messages, stream=False)
-        data = json.loads(response.read())
-        return data["choices"][0]["message"]["content"]
-
     def _retry_post(self, messages, stream=False):
         """POST with exponential backoff retry for mobile network resilience"""
-        import time
         for attempt in range(self._retry_max):
             try:
                 return self._post(messages, stream)
@@ -76,11 +73,14 @@ class Bridge:
                 time.sleep(wait)
 
     def chat(self, messages):
+        t0 = time.time()
         response = self._retry_post(messages, stream=False)
         data = json.loads(response.read())
+        self._last_latency = time.time() - t0
         return data["choices"][0]["message"]["content"]
 
     def stream(self, messages):
+        t0 = time.time()
         response = self._retry_post(messages, stream=True)
         for line_bytes in response:
             line = line_bytes.decode("utf-8").strip()
@@ -96,3 +96,4 @@ class Bridge:
                         yield delta["content"]
                 except (json.JSONDecodeError, KeyError, IndexError):
                     pass
+        self._last_latency = time.time() - t0
