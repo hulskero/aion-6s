@@ -465,13 +465,13 @@ RULES:
             if last:
                 cl("SYS", "Retrying last query...")
                 ctx = self.memory.get_context()
-                stripped = []
-                for msg in ctx:
-                    stripped.append(msg)
-                    if msg is ctx[-1] or msg["role"] == "user":
-                        continue
-                self.memory.context = stripped
-                self.memory.add("user", last)
+                last_idx = None
+                for i in range(len(ctx) - 1, -1, -1):
+                    if ctx[i]["role"] == "user":
+                        last_idx = i
+                        break
+                if last_idx is not None:
+                    self.memory.context = ctx[:last_idx + 1]
                 resp = self._stream()
                 if resp:
                     print()

@@ -28,6 +28,7 @@ class Bridge:
         self.rate_limit = config.get("rate_limit", 30)
         self._retry_max = 3
         self._last_latency = 0
+        self._last_usage = None
         self._call_timestamps = []
 
     def update_config(self, config):
