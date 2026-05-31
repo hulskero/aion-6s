@@ -572,6 +572,20 @@ RULES:
         elif cmd == "/battery":
             self._exec_plugin("battery", "")
 
+        elif cmd.startswith("/apikey"):
+            parts = cmd.split(None, 1)
+            if len(parts) == 1:
+                key = self.config.get("api_key", "")
+                masked = key[:12] + "..." + key[-4:] if len(key) > 16 else "(not set)"
+                cl("SYS", f"API key: {masked}")
+                cl("SYS", "Usage: /apikey nvapi-xxxxxxxxxxxx")
+            else:
+                new_key = parts[1].strip()
+                self.config["api_key"] = new_key
+                self._save_config(self.config)
+                self.bridge.update_config(self.config)
+                cl("SYS", "API key updated")
+
         elif cmd == "/heal":
             cl("SYS", self.healer.summary())
 
@@ -587,6 +601,7 @@ RULES:
   /auto              Auto mode — full autonomous, guardrails only
   /chat              Chat mode (default) — commands with warning
   /battery           Check battery status
+  /apikey <key>      Change API key
   /plugins           List loaded plugins
   /model [name]      Show/change model (no args = list available)
   /clear             Reset conversation context
