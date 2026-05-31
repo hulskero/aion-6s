@@ -11,6 +11,7 @@ try:
     import fcntl
 except ImportError:
     fcntl = None
+import copy
 import itertools
 import threading
 try:
@@ -51,14 +52,56 @@ def cl(color, text):
     print(f"{ANSI[color]}{text}{ANSI['RST']}")
 
 
+def _obfuscate_secrets(text):
+    """Obfuscate sensitive data like API keys in text."""
+    if not isinstance(text, str):
+        return text
+    # Obfuscate NVIDIA API keys
+    text = re.sub(r'nvapi-[A-Za-z0-9\-_]{20,}', 'nvapi-[REDACTED]', text)
+    # Obfuscate other potential secrets
+    text = re.sub(r'sk-[A-Za-z0-9]{20,}', 'sk-[REDACTED]', text)
+    text = re.sub(r'ghp_[A-Za-z0-9]{20,}', 'ghp_[REDACTED]', text)
+    text = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '[REDACTED_EMAIL]', text)
+    return text
+
 def audit_log(entry):
-    """Thread-safe audit logging with file locking."""
+    """Thread-safe audit logging with file locking and secret obfuscation."""
     try:
+        # Create a copy of entry to avoid modifying original
+        entry_copy = copy.deepcopy(entry)
+
+        # Obfuscate secrets in the entry
+        def obfuscate_dict(d):
+            if isinstance(d, dict):
+                for key, value in d.items():
+                    if isinstance(value, str):
+                        d[key] = _obfuscate_secrets(value)
+                    elif isinstance(value, dict):
+                        obfuscate_dict(value)
+                    elif isinstance(value, list):
+                        for i, item in enumerate(value):
+                            if isinstance(item, str):
+                                value[i] = _obfuscate_secrets(item)
+                            elif isinstance(item, dict):
+                                obfuscate_dict(item)
+            elif isinstance(d, list):
+                for i, item in enumerate(d):
+                    if isinstance(item, str):
+                        d[i] = _obfuscate_secrets(item)
+                    elif isinstance(item, dict):
+                        obfuscate_dict(item)
+                    elif isinstance(item, list):
+                        for j, subitem in enumerate(item):
+                            if isinstance(subitem, str):
+                                item[j] = _obfuscate_secrets(subitem)
+
+        obfuscate_dict(entry_copy)
+
         with open(AUDIT_LOG, "a") as f:
             if fcntl:
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
-                f.write(json.dumps(entry) + "\n")
+                f.write(json.dumps(entry_copy) + "\n")
             finally:
                 if fcntl:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
@@ -84,6 +127,9 @@ class AION:
         self.mode = "chat"
         self.cmd_history = []
         self.last_user_msg = ""
+        # Define workspace directory for sandboxing
+        self.workspace = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
+        os.makedirs(self.workspace, exist_ok=True)
         self._init_components()
 
     def _validate_config(self, config):
@@ -148,8 +194,10 @@ class AION:
             "rate_limit": 30
         }
 
+        # Prefer environment variable for API key (more secure)
         if os.environ.get("NVIDIA_API_KEY"):
             default_config["api_key"] = os.environ["NVIDIA_API_KEY"]
+            # Skip file based config if env var is set
             return default_config
 
         while True:
@@ -221,7 +269,7 @@ class AION:
         self._check_config_security()
 
         self.bridge = Bridge(self.config)
-        self.jailbreak = Jailbreak(self.config.get("jailbreak_mode", "auto"))
+        self.jailbreak = Jailbreak(self.config.get("jailbreak_mode", "auto"), workspace=self.workspace)
         self.memory = MemoryManager(self.config.get("max_context_pairs", 5))
         self.healer = SelfHeal(self.bridge, self.config.get("max_heal_attempts", 3))
         self.plugins = load_plugins(os.path.join(os.path.dirname(__file__), "plugins"))

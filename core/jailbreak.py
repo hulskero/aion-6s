@@ -1,7 +1,8 @@
 import subprocess
 import os
 import urllib.parse
-import shlex
+
+from core.input_validator import safe_shell_split
 
 # Simple shell tokenizer for iOS commands
 # Maps common commands to safe handlers
@@ -22,7 +23,6 @@ SAFE_COMMANDS = {
     'open': None, 'sbreload': None, 'uicache': None,
     # Scripting
     'python3': None, 'python': None, 'printenv': None, 'env': None,
-    'sh': None, 'bash': None, 'zsh': None,
     # Editors
     'vim': None, 'pico': None, 'ed': None, 'nano': None,
     # Process
@@ -34,11 +34,7 @@ SAFE_COMMANDS = {
 
 def _tokenize(cmd):
     """Parse command into safe argv list. Returns None if potentially unsafe."""
-    try:
-        parts = shlex.split(cmd)
-    except ValueError:
-        return None  # Invalid quoting
-
+    parts = safe_shell_split(cmd)
     if not parts:
         return None
 
@@ -55,16 +51,16 @@ def _tokenize(cmd):
                     pass
         return parts
 
-    # For shell built-ins and redirects, we still use shell=True
-    # but guardrails should have blocked dangerous patterns
+    # Command not in SAFE_COMMANDS whitelist
     return None
 
 
 class Jailbreak:
-    __slots__ = ["mode"]
+    __slots__ = ["mode", "workspace"]
 
-    def __init__(self, mode="auto"):
+    def __init__(self, mode="auto", workspace=None):
         self.mode = self._detect(mode)
+        self.workspace = workspace
 
     def _detect(self, mode):
         if mode != "auto":
@@ -77,10 +73,13 @@ class Jailbreak:
 
     def run(self, cmd, timeout=10):
         """Execute command safely. Always uses argv (shell=False), never shell injection."""
+        argv = _tokenize(cmd)
+        if argv is None:
+            return {"success": False, "stdout": "", "stderr": "Command not allowed or invalid syntax", "code": -1}
         try:
-            argv = shlex.split(cmd)
             result = subprocess.run(
-                argv, shell=False, capture_output=True, text=True, timeout=timeout
+                argv, shell=False, capture_output=True, text=True, timeout=timeout,
+                cwd=self.workspace,
             )
             return {
                 "success": result.returncode == 0,
@@ -91,7 +90,7 @@ class Jailbreak:
         except subprocess.TimeoutExpired:
             return {"success": False, "stdout": "", "stderr": "TIMEOUT", "code": -1}
         except FileNotFoundError:
-            return {"success": False, "stdout": "", "stderr": f"Command not found: {cmd.split()[0]}", "code": 127}
+            return {"success": False, "stdout": "", "stderr": f"Command not found: {argv[0] if argv else 'unknown'}", "code": 127}
         except Exception as e:
             return {"success": False, "stdout": "", "stderr": str(e)[:500], "code": -1}
 
@@ -113,11 +112,11 @@ class Jailbreak:
 
     def info(self):
         uname = self.run("uname -a")
-        mem = self.run("vm_stat 2>/dev/null || free 2>/dev/null || echo 'mem n/a'")
-        disk = self.run("df -h / 2>/dev/null | tail -1")
+        mem = self.run("vm_stat")
+        disk = self.run("df -h /")
         return {
             "mode": self.mode,
             "uname": uname["stdout"].strip(),
-            "memory": mem["stdout"].strip(),
-            "disk": disk["stdout"].strip(),
+            "memory": mem["stdout"].strip() if mem["success"] else "mem n/a",
+            "disk": disk["stdout"].strip() if disk["success"] else "disk n/a",
         }

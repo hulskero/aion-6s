@@ -1,7 +1,11 @@
 import re
 
-MAX_CMD_LEN = 500
+from core.input_validator import sanitize_input
 
+MAX_CMD_LEN = 500
+# Version: 2026-05-31-1 - Enhanced guardrails for AION-6S
+
+# Extended list of blocked patterns with more comprehensive protection
 BLOCKED = [
     # Root/system destruction
     (r'\brm\s+-rf\s+/\s*$', "rm -rf /"),
@@ -9,34 +13,83 @@ BLOCKED = [
     (r'\brm\s+-rf\s+\~/?\s*$', "rm -rf ~ (home)"),
     (r'\brm\s+-rf\s+\$HOME', "rm -rf $HOME"),
     (r'\brm\s+-rf\s+/\*', "rm -rf /* (glob root)"),
+    (r'\brm\s+-rf\s+', "Any rm -rf variant"),  # Catch-all for rm -rf
+
     # Disk/block device operations
     (r'\bdd\s+if=.*of=/dev/', "dd to raw device"),
     (r'\bmkfs\.\w+\s+/dev/', "mkfs on device"),
     (r'\bfdisk\s+/dev/', "fdisk on device"),
     (r'>\s*/dev/[hs]d', "write to block device"),
     (r'>\s*/dev/r?\w+', "write to /dev/ device"),
+    (r'dd\s+if=.*of=.*\|\s*.*', "dd pipe to another command"),
+
     # Privilege escalation
-    (r'\bchmod\s+777\s+/', "chmod 777 /"),
+    (r'\bchmod\s+[7-9]{3}\s+/', "chmod with dangerous permissions on root"),
     (r'\bchown\s+-R\s+\S+\s+/\s*$', "chown -R /"),
     (r'\bsu\s+[-\s]', "switch user"),
     (r'\bsudo\s+', "sudo (not available)"),
     (r'\bpasswd\s+', "change password"),
     (r'\bchroot\s+', "chroot"),
+    (r'\busermod\s+', "modify user accounts"),
+    (r'\buseradd\s+', "add user accounts"),
+    (r'\buserdel\s+', "delete user accounts"),
+
     # System shutdown/reboot
-    (r'\bshutdown\s+-[rhPH]', "shutdown/reboot"),
-    (r'\breboot\s*$', "reboot"),
-    (r'\bpoweroff\s*$', "poweroff"),
-    (r'\bhalt\s*$', "halt"),
-    (r'\binit\s+[06]\b', "init 0/6 (shutdown)"),
-    # Fork bomb
+    (r'\bshutdown\s+', "shutdown command"),
+    (r'\breboot\s+', "reboot command"),
+    (r'\bpoweroff\s+', "poweroff command"),
+    (r'\bhalt\s+', "halt command"),
+    (r'\binit\s+[06]', "init 0/6 (shutdown)"),
+    (r'\bsystemctl\s+(poweroff|reboot|halt)', "systemctl power operations"),
+
+    # Fork bomb and similar
     (r':\(\)\s*\{', "fork bomb"),
+    (r'\[.*\]\s*-\s*\[.*\]\s*&\s*while\s+true', "another fork bomb variant"),
+
     # Remote code execution patterns
-    (r'(curl|wget)\s+.*\|\s*(?:sh|bash|zsh|python|python3|perl|ruby)', "pipe download to shell"),
-    (r'(curl|wget)\s+.*-O\s+.*&&\s*(?:sh|bash|python|python3|perl|ruby)', "download and execute"),
-    (r'`.*(?:rm|dd|mkfs|reboot|shutdown|chmod|chown|passwd|su|sudo).*?`', "backtick with dangerous cmd"),
-    (r'\$\s*\((?:rm|dd|mkfs|reboot|shutdown|chmod|chown|passwd|su|sudo)', "subshell with dangerous cmd"),
+    (r'(curl|wget|fetch)\s+.*\|\s*(?:sh|bash|zsh|python|python3|perl|ruby|ash|dash)', "pipe download to shell"),
+    (r'(curl|wget|fetch)\s+.*-O\s+.*\&\&.*\s*(?:sh|bash|zsh|python|python3|perl|ruby|ash|dash)', "download and execute"),
+    (r'(curl|wget|fetch)\s+.*\&\&.*\s*(?:sh|bash|zsh|python|python3|perl|ruby|ash|dash)', "download then execute"),
+    (r'`.*(?:rm|dd|mkfs|reboot|shutdown|chmod|chown|passwd|su|sudo|chroot|mount|umount).*?`', "backtick with dangerous cmd"),
+    (r'\$\s*\((?:rm|dd|mkfs|reboot|shutdown|chmod|chown|passwd|su|sudo|chroot|mount|umount)', "subshell with dangerous cmd"),
     (r'\$\(.*\)', "subshell execution (blocked)"),
     (r'`.*`', "backtick execution (blocked)"),
+
+    # File system damage - protected directories
+    (r'>\s*/etc/', "writing to /etc directory"),
+    (r'>\s*/boot/', "writing to /boot directory"),
+    (r'>\s*/bin/', "writing to /bin directory"),
+    (r'>\s*/sbin/', "writing to /sbin directory"),
+    (r'>\s*/usr/bin/', "writing to /usr/bin directory"),
+    (r'>\s*/usr/sbin/', "writing to /usr/sbin directory"),
+    (r'>>\s*/etc/', "appending to /etc directory"),
+    (r'>\s*/var/', "writing to /var directory"),
+    (r'>>\s*/var/', "appending to /var directory"),
+    (r'>\s*/Users/.*/Library/', "writing to user Library directory"),
+    (r'>>\s*/Users/.*/Library/', "appending to user Library directory"),
+    (r'>\s*/private/etc/', "writing to /private/etc directory"),
+    (r'>\s*/private/var/', "writing to /private/var directory"),
+    (r'mv\s+/etc/.*', "moving /etc files"),
+    (r'mv\s+/var/.*', "moving /var files"),
+    (r'mv\s+/Users/.*/Library/.*', "moving user Library files"),
+    (r'cp\s+/etc/.*', "copying /etc files"),
+    (r'cp\s+/var/.*', "copying /var files"),
+    (r'cp\s+/Users/.*/Library/.*', "copying user Library files"),
+
+    # Dangerous mounts
+    (r'mount\s+.*\/\s*', "remounting root"),
+    (r'umount\s+\/\s*', "unmounting root"),
+    (r'mount\s+.*\s+/\s*', "mounting to root"),
+
+    # Module/driver manipulation
+    (r'insmod\s+', "insert kernel module"),
+    (r'rmmod\s+', "remove kernel module"),
+    (r'modprobe\s+', "load kernel module"),
+
+    # Network manipulation that could be dangerous
+    (r'iptables\s+.*\-P\s+.*(DROP|ACCEPT)', "iptables policy change"),
+    (r'ifconfig\s+.*down', "network interface down"),
+    (r'ip\s+link\s+set\s+.*down', "ip link set down"),
 ]
 
 DESTRUCTIVE = [
@@ -56,6 +109,22 @@ DESTRUCTIVE = [
     r'\buser(del|mod)\s+',
     r'\bpasswd\s+',
     r'\bsudo\s+',
+    r'\bchroot\s+',
+    r'\bshutdown\s+',
+    r'\breboot\s+',
+    r'\bpoweroff\s+',
+    r'\bhalt\s+',
+    r'\binit\s+',
+    r'\bmkfs\s+',
+    r'\bfdisk\s+',
+    r'\bparted\s+',
+    r'\bpartprobe\s+',
+    r'\bhdparm\s+',
+    r'\bwipefs\s+',
+    r'\bcryptsetup\s+',
+    r'\blvm\s+',
+    r'\bvg\s+',
+    r'\blv\s+',
 ]
 
 CONFIRM_CMD = input if __name__ != "__main__" else input

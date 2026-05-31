@@ -62,10 +62,15 @@ Pak spusť znovu: `python3 aion.py`
 
 ## Bezpečnost
 
-- Blokovány nebezpečné příkazy (rm -rf, dd, reboot, sudo...)
+- Blokovány nebezpečné příkazy (rm -rf, dd, reboot, sudo...) prostřednictvím rozšířených guardrails
 - Destruktivní operace vyžadují potvrzení (kromě `/auto`)
-- Audit log všech operací
+- Audit log všech operací s obfuskací tajných dat
 - API klíč ideálně v `NVIDIA_API_KEY` env var (ne v `config.json`)
+- Vstupní validace a sanitizace pro prevenci injection útoků
+- Omezení pracovního adresáře na sandboxovaný workspace
+- Síťový přístup omezen na whitelisted domény
+- Velikostní omezení výstupu s automatickým zkrácením
+- Ochrana proti shell injection přes bezpečné subprocess volání
 
 ## Požadavky
 
@@ -77,3 +82,14 @@ Pak spusť znovu: `python3 aion.py`
 ## License
 
 MIT
+
+## Nedávná vylepšení (2026-05-31)
+
+- Rozšířené bezpečnostní guardrails s komplexnější detekcí destruktivních příkazů
+- Vstupní validace a sanitizační funkce v `core/input_validator.py`
+- Preference proměnné prostředí `NVIDIA_API_KEY` před ukládáním do `config.json`
+- Obfuskace tajných dat v audit logu a výstupech
+- Jednotkové testy pro validaci a guardrails v `tests/` adresáři
+- Vylepšená zpětná vazba s barevnými indikátory a časováním
+- `/retry` příkaz pro automatické opakování selhaných API dotazů
+- Konzervativnější výchozí hodnoty optimalizované pro iPhone 6s (max_tokens=512, request_timeout=300s)
