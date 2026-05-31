@@ -17,6 +17,8 @@ def load_plugins(plugins_dir):
         name = f[:-3]
         path = os.path.join(plugins_path, f)
         try:
+            if name in sys.modules:
+                del sys.modules[name]
             spec = importlib.util.spec_from_file_location(name, path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
@@ -31,4 +33,11 @@ def reload_plugins(plugins_dir):
     for mod_name in list(sys.modules.keys()):
         if "plugins." in mod_name or mod_name == "plugins":
             del sys.modules[mod_name]
+    plugins_path = os.path.abspath(plugins_dir)
+    for f in sorted(os.listdir(plugins_path)):
+        if not f.endswith(".py") or f.startswith("_"):
+            continue
+        name = f[:-3]
+        if name in sys.modules:
+            del sys.modules[name]
     return load_plugins(plugins_dir)

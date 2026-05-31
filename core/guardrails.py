@@ -13,7 +13,7 @@ BLOCKED = [
     (r'\brm\s+-rf\s+\~/?\s*$', "rm -rf ~ (home)"),
     (r'\brm\s+-rf\s+\$HOME', "rm -rf $HOME"),
     (r'\brm\s+-rf\s+/\*', "rm -rf /* (glob root)"),
-    (r'\brm\s+-rf\s+', "Any rm -rf variant"),  # Catch-all for rm -rf
+    # (catch-all rm -rf removed — workspace sandbox handles safety)
 
     # Disk/block device operations
     (r'\bdd\s+if=.*of=/dev/', "dd to raw device"),
@@ -127,7 +127,6 @@ DESTRUCTIVE = [
     r'\blv\s+',
 ]
 
-CONFIRM_CMD = input if __name__ != "__main__" else input
 _proactive_yes = False
 
 

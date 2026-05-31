@@ -136,6 +136,7 @@ class Bridge:
         response = self._retry_post(messages, stream=False)
         data = json.loads(response.read())
         self._last_latency = time.time() - t0
+        self._last_usage = data.get("usage")
         return data["choices"][0]["message"]["content"]
 
     def stream(self, messages):

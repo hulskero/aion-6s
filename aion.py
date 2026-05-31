@@ -435,12 +435,12 @@ RULES:
         parts = safe_shell_split(text)
         if not parts:
             cl("ERR", "  [shortcut] missing arguments")
-            return
+            return {"success": False, "stdout": "", "stderr": "missing arguments", "code": -1}
         action = parts[0]
         name = parts[1] if len(parts) > 1 else None
         inp = parts[2] if len(parts) > 2 else None
         cl("SYS", f"  [shortcut] {action} {name or ''}")
-        self.jailbreak.run_shortcut(action, name, inp)
+        return self.jailbreak.run_shortcut(action, name, inp)
 
     def _process_ai_response(self, text, heal=True):
         from core.guardrails import check_ai_response
@@ -467,8 +467,9 @@ RULES:
                 result["stdout"] = plugin_res["output"]
                 result["success"] = plugin_res["success"]
             elif kind == "shortcut":
-                self._exec_shortcut(rest)
-                result["success"] = True
+                shortcut_res = self._exec_shortcut(rest)
+                result["success"] = shortcut_res.get("success", True) if shortcut_res else True
+                result["stdout"] = (shortcut_res.get("stdout") or "") + (shortcut_res.get("stderr") or "") if shortcut_res else ""
             results.append(result)
         return results
 

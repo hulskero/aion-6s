@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -54,11 +55,11 @@ class SelfHeal:
 
         for absent in IOS_ABSENT:
             if absent in cmd and "not found" in stderr.lower():
-                self._cache[str(hash(cmd))] = f"FAIL {absent} not available on iOS"
+                self._cache[hashlib.md5(cmd.encode()).hexdigest()] = f"FAIL {absent} not available on iOS"
                 self._save_cache()
                 return None
 
-        cache_key = str(hash(cmd.strip() + stderr.strip()[-300:]))
+        cache_key = hashlib.md5((cmd.strip() + stderr.strip()[-300:]).encode()).hexdigest()
         cached = self._cache.get(cache_key)
         if cached and cached != cmd:
             if not cached.startswith("FAIL"):
