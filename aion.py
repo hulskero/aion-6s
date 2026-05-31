@@ -572,8 +572,8 @@ RULES:
         elif cmd == "/battery":
             self._exec_plugin("battery", "")
 
-        elif cmd.startswith("/apikey"):
-            parts = cmd.split(None, 1)
+        elif line.lower().startswith("/apikey"):
+            parts = line.split(None, 1)
             if len(parts) == 1:
                 key = self.config.get("api_key", "")
                 masked = key[:12] + "..." + key[-4:] if len(key) > 16 else "(not set)"

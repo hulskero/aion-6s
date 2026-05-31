@@ -88,6 +88,8 @@ class Bridge:
             code = e.code
             if code == 401:
                 hint = " — Invalid API key"
+            elif code == 403:
+                hint = " — NVIDIA needs 'Public API Endpoints' enabled (check build.nvidia.com)"
             elif code == 429:
                 hint = " — Rate limited, waiting..."
             elif code >= 500:
@@ -118,7 +120,7 @@ class Bridge:
                 return self._post(messages, stream)
             except APIError as e:
                 estr = str(e)
-                if "401" in estr or "Invalid API key" in estr:
+                if "401" in estr or "403" in estr or "Invalid API key" in estr:
                     raise
                 if "429" in estr and attempt < self._retry_max - 1:
                     wait = (attempt + 1) * 10
