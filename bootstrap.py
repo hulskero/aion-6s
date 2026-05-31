@@ -16,6 +16,7 @@ FILES = {
     "core/memory.py": "core/memory.py",
     "core/guardrails.py": "core/guardrails.py",
     "core/self_heal.py": "core/self_heal.py",
+    "core/input_validator.py": "core/input_validator.py",
     "plugins/__init__.py": "plugins/__init__.py",
     "plugins/system_tools.py": "plugins/system_tools.py",
     "plugins/nfc_manager.py": "plugins/nfc_manager.py",
