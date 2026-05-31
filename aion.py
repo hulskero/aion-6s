@@ -298,7 +298,9 @@ class AION:
 AVAILABLE NÁSTROJE:
 {plugin_list}
   @cmd <shell command>     - execute system command
-  @shortcut <name> [input] - run iOS Shortcut
+  @shortcut run <name> [input]  - run iOS Shortcut
+  @shortcut create <name>       - create new iOS Shortcut
+  @shortcut list                - list all iOS Shortcuts
 
 JAK POUŽÍVAT NÁSTROJE:
 Když uživatel požádá o něco co vyžaduje nástroj, postupuj takto:
@@ -428,9 +430,17 @@ RULES:
             print(f"{ANSI['GRY']}  │{ANSI['RST']} {msg}")
             return {"success": False, "output": msg}
 
-    def _exec_shortcut(self, name, inp=None):
-        cl("SYS", f"  [shortcut] {name}")
-        self.jailbreak.run_shortcut(name, inp)
+    def _exec_shortcut(self, text):
+        from core.input_validator import safe_shell_split
+        parts = safe_shell_split(text)
+        if not parts:
+            cl("ERR", "  [shortcut] missing arguments")
+            return
+        action = parts[0]
+        name = parts[1] if len(parts) > 1 else None
+        inp = parts[2] if len(parts) > 2 else None
+        cl("SYS", f"  [shortcut] {action} {name or ''}")
+        self.jailbreak.run_shortcut(action, name, inp)
 
     def _process_ai_response(self, text, heal=True):
         from core.guardrails import check_ai_response
@@ -457,8 +467,7 @@ RULES:
                 result["stdout"] = plugin_res["output"]
                 result["success"] = plugin_res["success"]
             elif kind == "shortcut":
-                parts = rest.split(None, 1)
-                self._exec_shortcut(parts[0], parts[1] if len(parts) > 1 else None)
+                self._exec_shortcut(rest)
                 result["success"] = True
             results.append(result)
         return results

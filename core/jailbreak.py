@@ -21,6 +21,7 @@ SAFE_COMMANDS = {
     'find': None, 'basename': None, 'dirname': None, 'realpath': None,
     # iOS / a-Shell
     'open': None, 'sbreload': None, 'uicache': None,
+    'shortcuts': None,
     # Scripting
     'python3': None, 'python': None, 'printenv': None, 'env': None,
     # Editors
@@ -94,7 +95,17 @@ class Jailbreak:
         except Exception as e:
             return {"success": False, "stdout": "", "stderr": str(e)[:500], "code": -1}
 
-    def run_shortcut(self, name, input_data=None):
+    def run_shortcut(self, action, name=None, input_data=None):
+        if action == "list":
+            return self.run("shortcuts list")
+        if action == "create":
+            scheme = "shortcuts://create-shortcut"
+            if name:
+                scheme += f"?name={urllib.parse.quote(name)}"
+            return self.run(f"open '{scheme}'")
+        # run
+        if not name:
+            return {"success": False, "stdout": "", "stderr": "No shortcut name", "code": -1}
         scheme = f"shortcuts://run-shortcut?name={urllib.parse.quote(name)}"
         if input_data:
             scheme += f"&input={urllib.parse.quote(input_data)}"
