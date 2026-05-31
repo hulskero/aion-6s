@@ -27,9 +27,17 @@ SAFE_COMMANDS = {
     # Editors
     'vim': None, 'pico': None, 'ed': None, 'nano': None,
     # Process
-    'ps': None, 'kill': None, 'pkill': None,
+    'ps': None, 'kill': None, 'pkill': None, 'killall': None,
     # Disk
     'mount': None, 'stat': None, 'du': None,
+    # Package management (Procursus)
+    'apt': None, 'dpkg': None,
+    # Source control / download
+    'git': None, 'wget': None, 'rsync': None, 'curl': None,
+    # Archive
+    'unzip': None, 'tar': None, 'gzip': None, 'bzip2': None,
+    # Launch / service
+    'launchctl': None,
 }
 
 
@@ -67,10 +75,17 @@ class Jailbreak:
         if mode != "auto":
             return mode
         if os.path.exists("/var/mobile"):
+            self._fix_path()
             return "newterm"
         if os.path.exists("/Library"):
             return "ashell"
         return "ashell"
+
+    @staticmethod
+    def _fix_path():
+        jb_bin = "/var/jb/usr/bin"
+        if os.path.isdir(jb_bin) and jb_bin not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = f"{jb_bin}:{os.environ.get('PATH', '')}"
 
     def run(self, cmd, timeout=10):
         """Execute command safely. Always uses argv (shell=False), never shell injection."""

@@ -1,11 +1,16 @@
 import subprocess
 import os
+import shutil
+
+
+def _rc_path():
+    return shutil.which("rc") or "/var/jb/usr/bin/rc"
 
 
 def nfc_scan(args=""):
     lines = ["[NFC] Attempting tag scan..."]
 
-    if os.path.exists("/usr/bin/rc"):
+    if shutil.which("rc"):
         try:
             r = subprocess.run(["rc", "nfc", "scan"], capture_output=True, text=True, timeout=10)
             if r.returncode == 0:
@@ -28,7 +33,7 @@ def nfc_write(args=""):
     data = args.strip() or "Hello from AION-6S"
     lines = [f"[NFC] Writing tag: \"{data}\""]
 
-    if os.path.exists("/usr/bin/rc"):
+    if shutil.which("rc") or os.path.exists("/var/jb/usr/bin/rc"):
         try:
             r = subprocess.run(
                 ["rc", "nfc", "write", data], capture_output=True, text=True, timeout=10

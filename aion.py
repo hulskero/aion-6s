@@ -494,6 +494,167 @@ RULES:
         result = "\n".join(lines)
         return result[:5000] if len(result) > 5000 else result
 
+    def _do_update(self, args=""):
+        import subprocess as _sp
+        import shutil as _su
+        import py_compile as _pc
+        import tempfile as _tf
+        import json as _json
+
+        branch = "main"
+        if args and not args.startswith("-"):
+            branch = args.strip().split()[0]
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_url = "https://github.com/hulskero/aion-6s.git"
+        raw_base = f"https://raw.githubusercontent.com/hulskero/aion-6s/{branch}/"
+        api_tree = f"https://api.github.com/repos/hulskero/aion-6s/git/trees/{branch}?recursive=1"
+
+        updated = []
+        skipped = []
+        failed = []
+        restored = []
+
+        cl("SYS", f"Updating AION-6S from {branch}...")
+
+        def _dl_file(rel_path):
+            dest = os.path.join(base_dir, rel_path)
+            bak = dest + ".bak"
+            try:
+                r = _sp.run(
+                    ["curl", "-sL", raw_base + rel_path],
+                    capture_output=True, text=True, timeout=30
+                )
+                if r.returncode != 0 or not r.stdout.strip():
+                    return None
+                content = r.stdout
+                if rel_path.endswith(".py"):
+                    try:
+                        compile(content, rel_path, "exec")
+                    except SyntaxError as e:
+                        cl("ERR", f"  Syntax error in {rel_path}: {e}")
+                        return None
+                if os.path.exists(dest) and not os.path.exists(bak):
+                    try:
+                        _su.copy2(dest, bak)
+                    except Exception:
+                        pass
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "w") as f:
+                    f.write(content)
+                return rel_path
+            except Exception as e:
+                cl("ERR", f"  Download failed {rel_path}: {e}")
+                return None
+
+        def _try_git():
+            if not _su.which("git"):
+                return None
+            tmp = os.path.join(_tf.gettempdir(), "aion-6s_update")
+            if os.path.exists(tmp):
+                _su.rmtree(tmp, ignore_errors=True)
+            cl("SYS", "  Using git...")
+            r = _sp.run(
+                ["git", "clone", "--depth", "1", "-b", branch, repo_url, tmp],
+                capture_output=True, text=True, timeout=60
+            )
+            if r.returncode != 0:
+                cl("WARN", f"  git clone failed: {r.stderr.strip()[-200:]}")
+                _su.rmtree(tmp, ignore_errors=True)
+                return None
+            py_files = []
+            for root, dirs, files in os.walk(tmp):
+                for f in files:
+                    if not f.endswith((".py", ".json")):
+                        continue
+                    full = os.path.join(root, f)
+                    rel = os.path.relpath(full, tmp)
+                    if rel.startswith(".git") or rel.startswith("sessions") or rel.startswith("workspace"):
+                        continue
+                    py_files.append((rel, full))
+            for rel, full in py_files:
+                dest = os.path.join(base_dir, rel)
+                bak = dest + ".bak"
+                try:
+                    if f.endswith(".py"):
+                        with open(full) as _sf:
+                            compile(_sf.read(), rel, "exec")
+                    if os.path.exists(dest) and not os.path.exists(bak):
+                        _su.copy2(dest, bak)
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    _su.copy2(full, dest)
+                    updated.append(rel)
+                except SyntaxError as e:
+                    cl("ERR", f"  Syntax error in {rel}: {e}")
+                    failed.append(rel)
+                    if os.path.exists(bak):
+                        _su.copy2(bak, dest)
+                        restored.append(rel)
+                except Exception as e:
+                    cl("ERR", f"  Copy failed {rel}: {e}")
+                    failed.append(rel)
+            _su.rmtree(tmp, ignore_errors=True)
+            return True
+
+        def _try_curl():
+            cl("SYS", "  Using curl (no git)...")
+            r = _sp.run(
+                ["curl", "-sL", api_tree],
+                capture_output=True, text=True, timeout=30
+            )
+            if r.returncode != 0 or not r.stdout.strip():
+                cl("ERR", "  GitHub API unreachable")
+                return False
+            try:
+                tree = _json.loads(r.stdout)
+            except Exception:
+                cl("ERR", "  Invalid GitHub API response")
+                return False
+            entries = tree.get("tree", [])
+            py_entries = [e for e in entries if e["path"].endswith((".py", ".json")) and e["type"] == "blob"]
+            if not py_entries:
+                cl("ERR", "  No files found in GitHub tree")
+                return False
+            for entry in py_entries:
+                rel = entry["path"]
+                if rel.startswith(".git") or rel.startswith("sessions") or rel.startswith("workspace"):
+                    skipped.append(rel)
+                    continue
+                result = _dl_file(rel)
+                if result:
+                    updated.append(result)
+                else:
+                    failed.append(rel)
+            return True
+
+        git_ok = _try_git()
+        if not git_ok:
+            curl_ok = _try_curl()
+            if not curl_ok:
+                cl("ERR", "Update failed — no git and curl fallback failed")
+                return
+
+        if updated:
+            cl("SYS", f"  Updated ({len(updated)}):")
+            for f in updated:
+                cl("SYS", f"    ✓ {f}")
+        if failed:
+            cl("ERR", f"  Failed ({len(failed)}):")
+            for f in failed:
+                cl("ERR", f"    ✗ {f}")
+        if restored:
+            cl("WARN", f"  Restored from backup ({len(restored)}):")
+            for f in restored:
+                cl("WARN", f"    ↺ {f}")
+        if skipped:
+            for f in skipped:
+                cl("GRY", f"    - {f} (skipped)")
+
+        if not failed:
+            cl("SYS", "Update complete. Use /reload to reload plugins, or restart AION.")
+        else:
+            cl("WARN", "Update finished with errors — check above")
+
     def _handle_special(self, line):
         from core.guardrails import reset_confirm
 
@@ -632,29 +793,8 @@ RULES:
             self.system_prompt = self._build_prompt()
             cl("SYS", f"Plugins reloaded. {len(self.plugins)} active.")
 
-        elif cmd == "/update":
-            cl("SYS", "Updating AION-6S from GitHub...")
-            files = [
-                "aion.py", "config.example.json",
-                "core/__init__.py", "core/bridge.py", "core/jailbreak.py",
-                "core/memory.py", "core/guardrails.py", "core/self_heal.py",
-                "core/input_validator.py",
-                "plugins/__init__.py", "plugins/system_tools.py", "plugins/nfc_manager.py",
-                "plugins/battery.py", "plugins/location.py", "plugins/webfetch.py",
-                "plugins/weather.py",
-            ]
-            base_url = "https://raw.githubusercontent.com/hulskero/aion-6s/main/"
-            import subprocess
-            for f in files:
-                cl("SYS", f"  {f}")
-                r = subprocess.run(
-                    ["curl", "-sL", base_url + f, "-o", f],
-                    timeout=30
-                )
-                if r.returncode != 0:
-                    cl("ERR", f"  failed: {f}")
-            cl("SYS", "Update done. Restart with: python3 aion.py")
-            sys.exit(0)
+        elif cmd.startswith("/update"):
+            self._do_update(cmd.split(None, 1)[1] if len(cmd.split(None, 1)) > 1 else "")
 
         elif cmd == "/status":
             import time
