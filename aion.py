@@ -119,6 +119,7 @@ class AION:
         "config", "bridge", "jailbreak", "memory",
         "healer", "plugins", "system_prompt", "mode",
         "config_path", "cmd_history", "last_user_msg",
+        "workspace",
     ]
 
     def __init__(self):
