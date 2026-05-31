@@ -89,7 +89,7 @@ class Bridge:
             if code == 401:
                 hint = " — Invalid API key"
             elif code == 403:
-                hint = " — NVIDIA needs 'Public API Endpoints' enabled (check build.nvidia.com)"
+                hint = " — Authorization failed (check API key)"
             elif code == 429:
                 hint = " — Rate limited, waiting..."
             elif code >= 500:
