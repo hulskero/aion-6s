@@ -13,7 +13,7 @@ class Bridge:
     __slots__ = [
         "api_key", "base_url", "model", "max_tokens", "temperature",
         "request_timeout", "rate_limit", "_retry_max", "_last_latency",
-        "_call_timestamps",
+        "_last_usage", "_call_timestamps",
     ]
 
     def __init__(self, config):

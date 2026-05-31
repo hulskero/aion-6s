@@ -7,7 +7,7 @@ BLOCKED = [
     (r'\brm\s+-rf\s+/\s*$', "rm -rf /"),
     (r'\brm\s+-rf\s+/\s+\S', "rm -rf / with args"),
     (r'\brm\s+-rf\s+\~/?\s*$', "rm -rf ~ (home)"),
-    (r'\brm\s+-rf\s+\$HOME', "rm -rf \$HOME"),
+    (r'\brm\s+-rf\s+\$HOME', "rm -rf $HOME"),
     (r'\brm\s+-rf\s+/\*', "rm -rf /* (glob root)"),
     # Disk/block device operations
     (r'\bdd\s+if=.*of=/dev/', "dd to raw device"),
