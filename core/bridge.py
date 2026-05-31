@@ -18,14 +18,21 @@ class Bridge:
         "_last_usage", "_call_timestamps",
     ]
 
+    DEFAULTS = {
+        "max_tokens": 512,
+        "request_timeout": 300,
+        "rate_limit": 30,
+        "temperature": 0.7,
+    }
+
     def __init__(self, config):
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
         self.base_url = config.get("base_url", "https://integrate.api.nvidia.com/v1")
         self.model = config.get("model", "deepseek-ai/deepseek-v4-flash")
-        self.max_tokens = config.get("max_tokens", 2048)
-        self.temperature = config.get("temperature", 0.7)
-        self.request_timeout = config.get("request_timeout", 120)
-        self.rate_limit = config.get("rate_limit", 30)
+        self.max_tokens = config.get("max_tokens", self.DEFAULTS["max_tokens"])
+        self.temperature = config.get("temperature", self.DEFAULTS["temperature"])
+        self.request_timeout = config.get("request_timeout", self.DEFAULTS["request_timeout"])
+        self.rate_limit = config.get("rate_limit", self.DEFAULTS["rate_limit"])
         self._retry_max = 3
         self._last_latency = 0
         self._last_usage = None
@@ -35,10 +42,10 @@ class Bridge:
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
         self.base_url = config.get("base_url", "https://integrate.api.nvidia.com/v1")
         self.model = config.get("model", "deepseek-ai/deepseek-v4-flash")
-        self.max_tokens = config.get("max_tokens", 2048)
-        self.temperature = config.get("temperature", 0.7)
-        self.request_timeout = config.get("request_timeout", 120)
-        self.rate_limit = config.get("rate_limit", 30)
+        self.max_tokens = config.get("max_tokens", self.DEFAULTS["max_tokens"])
+        self.temperature = config.get("temperature", self.DEFAULTS["temperature"])
+        self.request_timeout = config.get("request_timeout", self.DEFAULTS["request_timeout"])
+        self.rate_limit = config.get("rate_limit", self.DEFAULTS["rate_limit"])
 
     def _enforce_rate_limit(self):
         now = time.time()
@@ -110,9 +117,11 @@ class Bridge:
             try:
                 return self._post(messages, stream)
             except APIError as e:
-                # Check for rate limit (429) and wait longer
-                if "429" in str(e) and attempt < self._retry_max - 1:
-                    wait = (attempt + 1) * 10  # Longer wait for rate limiting
+                estr = str(e)
+                if "401" in estr or "Invalid API key" in estr:
+                    raise
+                if "429" in estr and attempt < self._retry_max - 1:
+                    wait = (attempt + 1) * 10
                     time.sleep(wait)
                     continue
                 if attempt == self._retry_max - 1:

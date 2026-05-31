@@ -19,11 +19,17 @@ class MemoryManager:
         self.context.append({"role": role, "content": content})
         self._msg_count += 1
         sys_idx = 1 if len(self.context) > 1 and self.context[0]["role"] == "system" else 0
+        user_assistant = [m for m in self.context[sys_idx:] if m["role"] in ("user", "assistant")]
         tool_msgs = sum(1 for m in self.context[sys_idx:] if m["role"] == "tool")
-        max_msgs = self.max_pairs * 2 + tool_msgs
-        if len(self.context) - sys_idx > max_msgs:
+        max_pairs = self.max_pairs * 2
+        if len(user_assistant) > max_pairs:
+            excess = len(user_assistant) - max_pairs
             keep = self.context[:sys_idx]
-            keep += self.context[-(max_msgs):]
+            for msg in self.context[sys_idx:]:
+                if excess > 0 and msg["role"] in ("user", "assistant"):
+                    excess -= 1
+                    continue
+                keep.append(msg)
             self.context = keep
         self._smart_gc()
 

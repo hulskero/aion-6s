@@ -76,22 +76,12 @@ class Jailbreak:
         return "ashell"
 
     def run(self, cmd, timeout=10):
-        """Execute command safely. Tries shell=False first, falls back to shell=True."""
+        """Execute command safely. Always uses argv (shell=False), never shell injection."""
         try:
-            # Try safe parsing first
-            argv = _tokenize(cmd)
-            shell_mode = argv is None
-
-            if argv:
-                # Safe mode - no shell injection possible
-                result = subprocess.run(
-                    argv, shell=False, capture_output=True, text=True, timeout=timeout
-                )
-            else:
-                # Fallback to shell (guardrails should block dangerous patterns)
-                result = subprocess.run(
-                    cmd, shell=True, capture_output=True, text=True, timeout=timeout
-                )
+            argv = shlex.split(cmd)
+            result = subprocess.run(
+                argv, shell=False, capture_output=True, text=True, timeout=timeout
+            )
             return {
                 "success": result.returncode == 0,
                 "stdout": result.stdout,

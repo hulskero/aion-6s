@@ -3,10 +3,8 @@ import os
 
 
 def nfc_scan(args=""):
-    lines = []
-    lines.append("[NFC] Attempting tag scan...")
+    lines = ["[NFC] Attempting tag scan..."]
 
-    # 1) RemoteCompanion (jailbreak tweak)
     if os.path.exists("/usr/bin/rc"):
         try:
             r = subprocess.run(["rc", "nfc", "scan"], capture_output=True, text=True, timeout=10)
@@ -17,22 +15,11 @@ def nfc_scan(args=""):
         except Exception as e:
             lines.append(f"  rc error: {e}")
 
-    # 2) Shortcuts fallback
     lines.append("  Opening Shortcuts NFC scanner (if configured)...")
-    try:
-        subprocess.run(
-            ["open", "shortcuts://run-shortcut?name=ScanNFC"],
-            capture_output=True, timeout=5
-        )
-        lines.append("  Shortcut 'ScanNFC' launched.")
-    except Exception as e:
-        lines.append(f"  Shortcut failed: {e}")
-
-    # 3) nfcd daemon check (jailbroken)
-    if os.path.exists("/usr/libexec/nfcd"):
-        lines.append("  nfcd present - NFC daemon available.")
-    else:
-        lines.append("  nfcd not found (non-jailbroken or no NFC support).")
+    subprocess.run(
+        ["open", "shortcuts://run-shortcut?name=ScanNFC"],
+        capture_output=True, timeout=5
+    )
 
     return "\n".join(lines)
 
@@ -63,7 +50,7 @@ def nfc_manager(args=""):
     data = parts[1] if len(parts) > 1 else ""
 
     if command == "scan":
-        return nfc_scan(args)
+        return nfc_scan()
     elif command == "write":
         return nfc_write(data)
     else:

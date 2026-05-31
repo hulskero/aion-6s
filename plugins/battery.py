@@ -3,23 +3,54 @@ import re
 import shutil
 
 
-def run_battery(args=""):
-    if not shutil.which("pmset"):
-        return "Battery: not available on this device (pmset not found)"
+def _ioreg_batt():
+    """Read battery via ioreg (works on macOS, may work on jailbroken iOS)."""
     try:
-        result = subprocess.run(
+        r = subprocess.run(
+            ["ioreg", "-w", "0", "-rc", "AppleSmartBattery"],
+            capture_output=True, text=True, timeout=8
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        out = r.stdout
+        def get(k):
+            m = re.search(rf'"{k}"\s*=\s*(\S+)', out)
+            return m.group(1).rstrip(",") if m else "?"
+        pct = float(get("CurrentCapacity")) / float(get("MaxCapacity")) * 100 if get("MaxCapacity") != "?" else "?"
+        pct = f"{pct:.0f}" if isinstance(pct, float) else "?"
+        charging = "charging" if get("IsCharging") == "Yes" else "discharging"
+        return f"Battery: {pct}%, {charging}"
+    except Exception:
+        return None
+
+
+def _pmset_batt():
+    try:
+        r = subprocess.run(
             ["pmset", "-g", "batt"],
             capture_output=True, text=True, timeout=5
         )
-        output = result.stdout + result.stderr
+        output = r.stdout + r.stderr
         m = re.search(r'(\d+)%', output)
         pct = m.group(1) if m else "?"
         charging = "charging" if "charging" in output.lower() or "AC" in output or "connected" in output.lower() else "discharging"
         time_match = re.search(r'(\d+:\d+)', output)
         remaining = time_match.group(1) if time_match else "?"
         return f"Battery: {pct}%, {charging}, {remaining} remaining"
-    except Exception as e:
-        return f"Battery: unavailable ({e})"
+    except Exception:
+        return None
+
+
+def run_battery(args=""):
+    if shutil.which("pmset"):
+        result = _pmset_batt()
+        if result:
+            return result
+    if shutil.which("ioreg"):
+        result = _ioreg_batt()
+        if result:
+            return result
+    return "Battery: not available on this device"
 
 
 SKILL = {

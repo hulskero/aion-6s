@@ -317,12 +317,8 @@ RULES:
 
         duration = time.time() - t0
 
-        if result and result["success"]:
-            sys.stdout.write(f"  {ANSI['SYS']}✓{ANSI['RST']} ({duration:.1f}s)\n")
-        elif result:
-            sys.stdout.write(f"  {ANSI['ERR']}✗{ANSI['RST']} ({duration:.1f}s)\n")
-        else:
-            sys.stdout.write(f"  {ANSI['ERR']}✗{ANSI['RST']} ({duration:.1f}s)\n")
+        ok = result and result.get("success")
+        sys.stdout.write(f"  {ANSI['SYS'] if ok else ANSI['ERR']}{'✓' if ok else '✗'}{ANSI['RST']} ({duration:.1f}s)\n")
 
         if result and result["stdout"]:
             for line in result["stdout"].rstrip().split("\n"):
@@ -485,37 +481,44 @@ RULES:
                 if msg["role"] == "user":
                     last = msg["content"]
                     break
-            if last:
-                cl("SYS", "Retrying last query...")
-                ctx = self.memory.get_context()
-                last_idx = None
-                for i in range(len(ctx) - 1, -1, -1):
-                    if ctx[i]["role"] == "user":
-                        last_idx = i
-                        break
-                if last_idx is not None:
-                    self.memory.context = ctx[:last_idx + 1]
-                resp = self._stream()
-                if resp:
-                    print()
-                    final = resp
-                    if self.mode != "plan":
-                        for rnd in range(5):
-                            results = self._process_ai_response(final, heal=False)
-                            if not results:
-                                break
-                            self.memory.add("tool", self._format_tool_results(results))
-                            nxt = self._stream()
-                            if nxt is None:
-                                break
-                            print()
-                            final = nxt
-                    prompt_chars = sum(len(m.get("content", "")) for m in self.memory.get_context())
-                    self._show_stats(prompt_chars, len(final))
-                    self.memory.add("assistant", final)
-                    self.memory.cleanup()
-            else:
+            if not last:
                 cl("ERR", "No previous query to retry.")
+                return
+            ctx = self.memory.get_context()
+            last_idx = None
+            for i in range(len(ctx) - 1, -1, -1):
+                if ctx[i]["role"] == "user":
+                    last_idx = i
+                    break
+            if last_idx is not None:
+                self.memory.context = ctx[:last_idx + 1]
+            cl("SYS", "Retrying last query...")
+            resp = self._stream(gray=False)
+            if resp is None:
+                for attempt in range(3):
+                    cl("WARN", f"  API error — retrying (attempt {attempt+2}/4)…")
+                    resp = self._stream(gray=False)
+                    if resp is not None:
+                        break
+                if resp is None:
+                    cl("ERR", "  All retries failed — try again later")
+                    return
+            print()
+            final = resp
+            if self.mode != "plan":
+                for rnd in range(5):
+                    results = self._process_ai_response(final, heal=False)
+                    if not results:
+                        break
+                    self.memory.add("tool", self._format_tool_results(results))
+                    nxt = self._stream(gray=False)
+                    if nxt is None:
+                        break
+                    final = nxt
+            prompt_chars = sum(len(m.get("content", "")) for m in self.memory.get_context())
+            self._show_stats(prompt_chars, len(final))
+            self.memory.add("assistant", final)
+            self.memory.cleanup()
 
         elif cmd == "/heal":
             cl("SYS", self.healer.summary())

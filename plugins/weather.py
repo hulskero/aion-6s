@@ -18,7 +18,7 @@ WMO_CODES = {
 def _wttrin(location):
     url = f"https://wttr.in/{location}?format=%l:+%C,+%t,+%w,+%h&m" if location else "https://wttr.in/?format=%l:+%C,+%t,+%w,+%h&m"
     try:
-        r = subprocess.run(["curl", "-s", url], capture_output=True, text=True, timeout=8)
+        r = subprocess.run(["curl", "-sL", "-H", "User-Agent: AION-6S/1.0", url], capture_output=True, text=True, timeout=8)
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
     except Exception:
@@ -28,7 +28,7 @@ def _wttrin(location):
 def _openmeteo(location):
     try:
         r = subprocess.run(
-            ["curl", "-s", f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1"],
+            ["curl", "-sL", "-H", "User-Agent: AION-6S/1.0", f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1"],
             capture_output=True, text=True, timeout=8
         )
         if r.returncode != 0 or not r.stdout.strip():
@@ -40,14 +40,15 @@ def _openmeteo(location):
         lon = geo["results"][0]["longitude"]
         loc_name = geo["results"][0]["name"]
         r2 = subprocess.run(
-            ["curl", "-s", f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"],
+            ["curl", "-sL", "-H", "User-Agent: AION-6S/1.0", f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,weather_code,wind_speed_10m"],
             capture_output=True, text=True, timeout=8
         )
         if r2.returncode != 0 or not r2.stdout.strip():
             return None
-        w = json.loads(r2.stdout)["current_weather"]
-        code = WMO_CODES.get(w["weathercode"], f"Code {w['weathercode']}")
-        return f"{loc_name}: {w['temperature']}°C, {code}, wind {w['windspeed']} km/h"
+        data = json.loads(r2.stdout)
+        w = data["current"]
+        code = WMO_CODES.get(w["weather_code"], f"Code {w['weather_code']}")
+        return f"{loc_name}: {w['temperature_2m']}°C, {code}, wind {w['wind_speed_10m']} km/h"
     except Exception:
         pass
     return None

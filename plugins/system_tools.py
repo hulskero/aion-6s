@@ -1,62 +1,78 @@
 import subprocess
-import os
 import shutil
+
+
+def _run(argv, timeout=8):
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return r.stdout.strip().split("\n")[0][:120] or "no data"
+    except Exception as e:
+        return str(e)
+
+
+def _vmstat_mem():
+    """Parse vm_stat output into human-readable memory info."""
+    try:
+        r = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=8)
+        if r.returncode != 0:
+            return "mem n/a"
+        pages = {}
+        for line in r.stdout.strip().split("\n"):
+            if ":" in line:
+                key, val = line.split(":", 1)
+                val = val.strip().rstrip(".")
+                try:
+                    pages[key.strip()] = int(val)
+                except ValueError:
+                    pass
+        active = pages.get("Pages active", 0) * 16384
+        wired = pages.get("Pages wired down", 0) * 16384
+        compressed = pages.get("Pages stored in compressor", 0) * 16384
+        free = pages.get("Pages free", 0) * 16384
+        total_mb = (active + wired + compressed + free) // 1048576
+        used_mb = (active + wired + compressed) // 1048576
+        return f"{used_mb}M used / {total_mb}M total"
+    except Exception:
+        return "mem n/a"
 
 
 def sys_info(args=""):
     lines = ["[SYS] System Information:"]
 
     cmds = [
-        ("OS", "uname -a"),
-        ("Uptime", "uptime" if shutil.which("uptime") else None),
-        ("Memory", "free -h 2>/dev/null || echo 'mem n/a'"),
-        ("Disk", "df -h / 2>/dev/null | tail -1 || echo 'disk n/a'"),
-        ("CPU", "sysctl -n hw.ncpu 2>/dev/null || echo 'cpu n/a'"),
-        ("Load", "sysctl -n vm.loadavg 2>/dev/null || echo 'load n/a'"),
-        ("Processes", "ps aux 2>/dev/null | wc -l || echo 'ps n/a'"),
+        ("OS", ["uname", "-a"]),
+        ("Host", ["hostname"]),
+        ("Uptime", ["uptime"] if shutil.which("uptime") else None),
+        ("Memory", None),
+        ("Disk", ["df", "-h", "/"]),
+        ("CPU cores", ["sysctl", "-n", "hw.ncpu"]),
+        ("Load", ["sysctl", "-n", "vm.loadavg"]),
     ]
 
-    for label, cmd in cmds:
-        if cmd is None:
-            lines.append(f"  {label}: not available")
+    for label, argv in cmds:
+        if argv is None:
+            if label == "Memory":
+                lines.append(f"  {label}: {_vmstat_mem()}")
+            else:
+                lines.append(f"  {label}: not available")
             continue
-        try:
-            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
-            out = r.stdout.strip().split("\n")[0][:120] or "no data"
-            lines.append(f"  {label}: {out}")
-        except Exception as e:
-            lines.append(f"  {label}: {e}")
+        lines.append(f"  {label}: {_run(argv)}")
 
     return "\n".join(lines)
 
 
 def disk_usage(args=""):
     path = args.strip() or "/"
-    try:
-        r = subprocess.run(
-            f"du -sh {path} 2>/dev/null || df -h {path} 2>/dev/null | tail -1",
-            shell=True, capture_output=True, text=True, timeout=10
-        )
-        return r.stdout.strip() or "n/a"
-    except Exception as e:
-        return f"error: {e}"
+    out = _run(["df", "-h", path])
+    lines = out.split("\n")
+    return lines[-1] if len(lines) > 1 else out
 
 
 def wifi_status(args=""):
-    try:
-        if os.path.exists("/System/Library/PrivateFrameworks/MobileWiFi.framework"):
-            r = subprocess.run(
-                ["wlancfg", "show", "en0"],
-                capture_output=True, text=True, timeout=10
-            )
-            return r.stdout.strip()[:300] or "WiFi info unavailable"
-        r = subprocess.run(
-            "ifconfig en0 2>/dev/null || ifconfig lo0 2>/dev/null",
-            shell=True, capture_output=True, text=True, timeout=10
-        )
-        return r.stdout.strip()[:300] or "No WiFi interface found"
-    except Exception as e:
-        return f"error: {e}"
+    out = _run(["ifconfig", "en0"])
+    if "no data" in out or "error" in out:
+        out = _run(["ifconfig", "lo0"])
+    return out[:300] if len(out) > 300 else out
 
 
 SKILL = {

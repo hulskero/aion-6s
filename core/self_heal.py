@@ -49,7 +49,7 @@ class SelfHeal:
     def heal(self, cmd, stderr):
         self.history.append({"cmd": cmd, "error": stderr})
 
-        cache_key = stderr.strip()[-200:]
+        cache_key = str(hash(cmd.strip() + stderr.strip()[-300:]))
         cached = self._cache.get(cache_key)
         if cached and cached != cmd:
             if not cached.startswith("FAIL"):
