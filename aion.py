@@ -158,11 +158,11 @@ class AION:
         if config.get("jailbreak_mode") not in ("auto", "newterm", "ashell"):
             config["jailbreak_mode"] = "auto"
 
-        tout = config.get("request_timeout", 300)
+        tout = config.get("request_timeout", 90)
         if not isinstance(tout, (int, float)) or tout < 15:
-            config["request_timeout"] = 300
-        if tout > 300:
-            config["request_timeout"] = 300
+            config["request_timeout"] = 90
+        if tout > 180:
+            config["request_timeout"] = 180
 
         rl = config.get("rate_limit", 30)
         if not isinstance(rl, int) or rl < 1:
@@ -190,7 +190,7 @@ class AION:
             "max_heal_attempts": 3,
             "temperature": 0.7,
             "max_tokens": 512,
-            "request_timeout": 300,
+            "request_timeout": 90,
             "rate_limit": 30
         }
 
@@ -568,6 +568,9 @@ RULES:
             self.memory.add("assistant", final)
             self.memory.cleanup()
 
+        elif cmd == "/battery":
+            self._exec_plugin("battery", "")
+
         elif cmd == "/heal":
             cl("SYS", self.healer.summary())
 
@@ -582,6 +585,7 @@ RULES:
   /build             Build mode — execute with step confirmation
   /auto              Auto mode — full autonomous, guardrails only
   /chat              Chat mode (default) — commands with warning
+  /battery           Check battery status
   /plugins           List loaded plugins
   /model [name]      Show/change model (no args = list available)
   /clear             Reset conversation context
@@ -608,6 +612,7 @@ RULES:
                 "aion.py", "config.example.json",
                 "core/__init__.py", "core/bridge.py", "core/jailbreak.py",
                 "core/memory.py", "core/guardrails.py", "core/self_heal.py",
+                "core/input_validator.py",
                 "plugins/__init__.py", "plugins/system_tools.py", "plugins/nfc_manager.py",
                 "plugins/battery.py", "plugins/location.py", "plugins/webfetch.py",
                 "plugins/weather.py",

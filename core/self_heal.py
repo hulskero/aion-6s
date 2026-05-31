@@ -20,6 +20,9 @@ def sanitize(text):
     return text
 
 
+IOS_ABSENT = ["pmset", "free", "wlanconfig", "ps -ef", "launchctl", "system_profiler"]
+
+
 class SelfHeal:
     __slots__ = ["bridge", "max_tries", "history", "_cache", "_cache_path"]
 
@@ -48,6 +51,12 @@ class SelfHeal:
 
     def heal(self, cmd, stderr):
         self.history.append({"cmd": cmd, "error": stderr})
+
+        for absent in IOS_ABSENT:
+            if absent in cmd and "not found" in stderr.lower():
+                self._cache[str(hash(cmd))] = f"FAIL {absent} not available on iOS"
+                self._save_cache()
+                return None
 
         cache_key = str(hash(cmd.strip() + stderr.strip()[-300:]))
         cached = self._cache.get(cache_key)

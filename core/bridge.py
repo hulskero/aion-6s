@@ -20,7 +20,7 @@ class Bridge:
 
     DEFAULTS = {
         "max_tokens": 512,
-        "request_timeout": 300,
+        "request_timeout": 90,
         "rate_limit": 30,
         "temperature": 0.7,
     }
