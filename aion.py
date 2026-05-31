@@ -152,7 +152,7 @@ class AION:
                         config = json.load(f)
                     config = self._validate_config(config)
                     key = config.get("api_key", "")
-                    if not key or len(key) < 40 or key.startswith("nvapi-zWERU"):
+                    if not key or len(key) < 40 or key == "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":
                         config["api_key"] = self._prompt_api_key()
                         self._save_config(config)
                     return config
@@ -192,11 +192,13 @@ class AION:
         tmp_path = self.config_path + ".tmp"
         try:
             with open(tmp_path, "w") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                if fcntl:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 try:
                     json.dump(config, f, indent=2)
                 finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    if fcntl:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             os.replace(tmp_path, self.config_path)
         except Exception as e:
             cl("ERR", f"Config save error: {e}")
