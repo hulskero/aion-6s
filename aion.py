@@ -25,6 +25,8 @@ ANSI = {
     "ERR": "\033[91m",
     "WARN": "\033[93m",
     "CMD": "\033[95m",
+    "GRY": "\033[90m",
+    "DIM": "\033[2m",
     "BOLD": "\033[1m",
     "RST": "\033[0m",
     "CLR": "\033[2J\033[H",
@@ -93,7 +95,7 @@ class AION:
             config["max_context_pairs"] = 20  # Hard limit for iPhone
 
         if not isinstance(config.get("max_tokens"), int) or config["max_tokens"] < 100:
-            config["max_tokens"] = 2048
+            config["max_tokens"] = 512
         if config["max_tokens"] > 4096:
             config["max_tokens"] = 4096  # API limit
 
@@ -110,9 +112,9 @@ class AION:
         if config.get("jailbreak_mode") not in ("auto", "newterm", "ashell"):
             config["jailbreak_mode"] = "auto"
 
-        tout = config.get("request_timeout", 120)
+        tout = config.get("request_timeout", 300)
         if not isinstance(tout, (int, float)) or tout < 15:
-            config["request_timeout"] = 120
+            config["request_timeout"] = 300
         if tout > 300:
             config["request_timeout"] = 300
 
@@ -141,8 +143,8 @@ class AION:
             "max_context_pairs": 5,
             "max_heal_attempts": 3,
             "temperature": 0.7,
-            "max_tokens": 2048,
-            "request_timeout": 120,
+            "max_tokens": 512,
+            "request_timeout": 300,
             "rate_limit": 30
         }
 
@@ -289,12 +291,14 @@ RULES:
 
         blocked, is_dest = check(cmd)
         if blocked:
-            cl("ERR", f"  {blocked}")
+            c("ERR", f"  ✗ $ {cmd}")
+            print(f"{ANSI['GRY']}  │{ANSI['RST']} {blocked}")
             audit_log({"t": time.time(), "action": "blocked", "cmd": cmd, "reason": blocked})
             return None
 
         if self.mode == "plan":
-            cl("WARN", f"  [PLAN] Would run: $ {cmd}")
+            c("GRY", f"  [plan] $ {cmd}")
+            print()
             return None
 
         if self.mode in ("chat", "build") and is_dest:
@@ -308,32 +312,45 @@ RULES:
         if len(self.cmd_history) > 100:
             self.cmd_history = self.cmd_history[-50:]
 
-        cl("CMD", f"\n  $ {cmd}")
+        c("GRY", f"  ◎ $ {cmd}")
         result = self.jailbreak.run(cmd)
 
         duration = time.time() - t0
 
+        if result and result["success"]:
+            sys.stdout.write(f"  {ANSI['SYS']}✓{ANSI['RST']} ({duration:.1f}s)\n")
+        elif result:
+            sys.stdout.write(f"  {ANSI['ERR']}✗{ANSI['RST']} ({duration:.1f}s)\n")
+        else:
+            sys.stdout.write(f"  {ANSI['ERR']}✗{ANSI['RST']} ({duration:.1f}s)\n")
+
         if result and result["stdout"]:
-            print(result["stdout"].rstrip())
+            for line in result["stdout"].rstrip().split("\n"):
+                print(f"{ANSI['GRY']}  │{ANSI['RST']} {line}")
         if result and result["stderr"]:
-            cl("ERR", result["stderr"].rstrip())
+            for line in result["stderr"].rstrip().split("\n"):
+                print(f"{ANSI['GRY']}  │{ANSI['RST']} {ANSI['ERR']}{line}{ANSI['RST']}")
 
         if result and not result["success"] and result["stderr"] and allow_heal:
-            cl("WARN", "  [healing...]")
+            c("WARN", "  \u21bb healing...")
             fix = self.healer.heal(cmd, result["stderr"])
             if fix and fix != cmd:
                 blocked2, _ = check(fix)
                 if not blocked2:
-                    cl("CMD", f"  ! retry: {fix}")
+                    c("GRY", f"  ◎ $ {fix}")
                     healed = self.jailbreak.run(fix)
+                    dur2 = time.time() - t0
                     if healed and healed["success"]:
+                        sys.stdout.write(f"  {ANSI['SYS']}✓{ANSI['RST']} ({dur2:.1f}s)\n")
                         result = healed
                         if healed.get("stdout"):
-                            print(healed["stdout"].rstrip())
-                        if healed.get("stderr"):
-                            cl("ERR", healed["stderr"].rstrip())
-                    elif healed and healed.get("stderr"):
-                        cl("ERR", healed["stderr"].rstrip())
+                            for line in healed["stdout"].rstrip().split("\n"):
+                                print(f"{ANSI['GRY']}  │{ANSI['RST']} {line}")
+                    else:
+                        sys.stdout.write(f"  {ANSI['ERR']}✗{ANSI['RST']} ({dur2:.1f}s)\n")
+                        if healed and healed.get("stderr"):
+                            for line in healed["stderr"].rstrip().split("\n"):
+                                print(f"{ANSI['GRY']}  │{ANSI['RST']} {ANSI['ERR']}{line}{ANSI['RST']}")
 
         success = result.get("success", False) if result else False
         audit_log({
@@ -345,20 +362,26 @@ RULES:
         return result
 
     def _exec_plugin(self, name, args=""):
-        if name in self.plugins:
-            cl("SYS", f"  [plugin] {name} {args}")
-            try:
-                output = self.plugins[name]["run"](args)
-                if output:
-                    print(output)
-                return {"success": True, "output": output or ""}
-            except Exception as e:
-                msg = f"Plugin error: {e}"
-                cl("ERR", f"  {msg}")
-                return {"success": False, "output": msg}
-        msg = f"Plugin '{name}' not found. Available: {list(self.plugins.keys())}"
-        cl("ERR", f"  {msg}")
-        return {"success": False, "output": msg}
+        if name not in self.plugins:
+            c("ERR", f"  ✗ @plugin {name} {args} — not found")
+            msg = f"Plugin '{name}' not found. Available: {list(self.plugins.keys())}"
+            return {"success": False, "output": msg}
+        t0 = time.time()
+        c("GRY", f"  ◎ @plugin {name} {args}")
+        try:
+            output = self.plugins[name]["run"](args)
+            dur = time.time() - t0
+            sys.stdout.write(f"  {ANSI['SYS']}✓{ANSI['RST']} ({dur:.1f}s)\n")
+            if output:
+                for line in output.strip().split("\n"):
+                    print(f"{ANSI['GRY']}  │{ANSI['RST']} {line}")
+            return {"success": True, "output": output or ""}
+        except Exception as e:
+            dur = time.time() - t0
+            sys.stdout.write(f"  {ANSI['ERR']}✗{ANSI['RST']} ({dur:.1f}s)\n")
+            msg = f"Plugin error: {e}"
+            print(f"{ANSI['GRY']}  │{ANSI['RST']} {msg}")
+            return {"success": False, "output": msg}
 
     def _exec_shortcut(self, name, inp=None):
         cl("SYS", f"  [shortcut] {name}")
@@ -618,27 +641,30 @@ RULES:
         else:
             cl("ERR", f"Unknown: {cmd}")
 
-    def _stream(self, label="AI"):
-        """Stream AI response with animated braille spinner."""
+    def _stream(self, label="AI", gray=False):
+        """Stream AI response with animated braille spinner + elapsed time."""
         stop = threading.Event()
+        t0 = time.time()
         def spin():
             for char in itertools.cycle(PIXEL_SPINNER):
                 if stop.is_set():
                     return
-                sys.stdout.write(f"\r\033[K{ANSI['WARN']}{char}{ANSI['RST']} Thinking...")
+                elapsed = time.time() - t0
+                sys.stdout.write(f"\r\033[K{ANSI['WARN']}{char}{ANSI['RST']} Working... ({elapsed:.0f}s)")
                 sys.stdout.flush()
                 time.sleep(0.08)
         t = threading.Thread(target=spin, daemon=True)
         t.start()
 
+        color = ANSI["GRY"] if gray else ANSI[label]
         text = ""
         try:
             for token in self.bridge.stream(self.memory.get_context()):
                 if not stop.is_set():
                     stop.set()
                     t.join()
-                    sys.stdout.write(f"\r\033[K{ANSI[label]}{label}>{ANSI['RST']} ")
-                sys.stdout.write(token)
+                    sys.stdout.write(f"\r\033[K{color}{label}>{ANSI['RST']} ")
+                sys.stdout.write(f"{color}{token}{ANSI['RST']}")
                 sys.stdout.flush()
                 text += token
         except Exception as e:
@@ -700,10 +726,16 @@ RULES:
 
             self.memory.add("user", line)
 
-            response = self._stream()
+            response = self._stream(gray=False)
             if response is None:
-                continue
-            print()
+                for attempt in range(3):
+                    cl("WARN", f"  API error — retrying (attempt {attempt+2}/4)…")
+                    response = self._stream(gray=False)
+                    if response is not None:
+                        break
+                if response is None:
+                    cl("ERR", "  All retries failed — /retry or try again later")
+                    continue
             final = response
 
             if self.mode != "plan":
@@ -712,12 +744,14 @@ RULES:
                     if not results:
                         break
 
+                    c("DIM", f"\n  \u2501 round {rnd+1}/{MAX_TOOL_ROUNDS} \u2501\n")
+
                     self.memory.add("tool", self._format_tool_results(results))
 
-                    next_resp = self._stream()
+                    next_resp = self._stream(gray=False)
                     if next_resp is None:
+                        cl("WARN", "  API error — /retry the last query")
                         break
-                    print()
                     final = next_resp
             else:
                 self._process_ai_response(response, heal=False)
