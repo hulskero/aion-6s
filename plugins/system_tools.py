@@ -1,5 +1,6 @@
 import subprocess
 import os
+import shutil
 
 
 def sys_info(args=""):
@@ -7,21 +8,24 @@ def sys_info(args=""):
 
     cmds = [
         ("OS", "uname -a"),
-        ("Uptime", "uptime"),
-        ("Memory", "vm_stat 2>/dev/null || free -h 2>/dev/null || echo 'mem n/a'"),
-        ("Disk", "df -h / 2>/dev/null | tail -1"),
-        ("CPU", "sysctl -n hw.ncpu 2>/dev/null || echo 'n/a'"),
-        ("Load", "sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg 2>/dev/null || echo 'n/a'"),
-        ("Processes", "ps aux 2>/dev/null | wc -l || echo 'n/a'"),
+        ("Uptime", "uptime" if shutil.which("uptime") else None),
+        ("Memory", "free -h 2>/dev/null || echo 'mem n/a'"),
+        ("Disk", "df -h / 2>/dev/null | tail -1 || echo 'disk n/a'"),
+        ("CPU", "sysctl -n hw.ncpu 2>/dev/null || echo 'cpu n/a'"),
+        ("Load", "sysctl -n vm.loadavg 2>/dev/null || echo 'load n/a'"),
+        ("Processes", "ps aux 2>/dev/null | wc -l || echo 'ps n/a'"),
     ]
 
     for label, cmd in cmds:
+        if cmd is None:
+            lines.append(f"  {label}: not available")
+            continue
         try:
             r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
-            out = r.stdout.strip().split("\n")[0][:120]
+            out = r.stdout.strip().split("\n")[0][:120] or "no data"
             lines.append(f"  {label}: {out}")
         except Exception as e:
-            lines.append(f"  {label}: error - {e}")
+            lines.append(f"  {label}: {e}")
 
     return "\n".join(lines)
 

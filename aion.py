@@ -73,7 +73,7 @@ class AION:
     __slots__ = [
         "config", "bridge", "jailbreak", "memory",
         "healer", "plugins", "system_prompt", "mode",
-        "config_path", "cmd_history",
+        "config_path", "cmd_history", "last_user_msg",
     ]
 
     def __init__(self):
@@ -81,6 +81,7 @@ class AION:
         self.config = self._load_or_create_config()
         self.mode = "chat"
         self.cmd_history = []
+        self.last_user_msg = ""
         self._init_components()
 
     def _validate_config(self, config):
@@ -144,6 +145,10 @@ class AION:
             "request_timeout": 120,
             "rate_limit": 30
         }
+
+        if os.environ.get("NVIDIA_API_KEY"):
+            default_config["api_key"] = os.environ["NVIDIA_API_KEY"]
+            return default_config
 
         while True:
             if os.path.exists(self.config_path):
@@ -451,6 +456,44 @@ RULES:
             self.memory.set_system(self.system_prompt)
             cl("SYS", "Context cleared.")
 
+        elif cmd == "/retry":
+            last = None
+            for msg in reversed(self.memory.get_context()):
+                if msg["role"] == "user":
+                    last = msg["content"]
+                    break
+            if last:
+                cl("SYS", "Retrying last query...")
+                ctx = self.memory.get_context()
+                stripped = []
+                for msg in ctx:
+                    stripped.append(msg)
+                    if msg is ctx[-1] or msg["role"] == "user":
+                        continue
+                self.memory.context = stripped
+                self.memory.add("user", last)
+                resp = self._stream()
+                if resp:
+                    print()
+                    final = resp
+                    if self.mode != "plan":
+                        for rnd in range(5):
+                            results = self._process_ai_response(final, heal=False)
+                            if not results:
+                                break
+                            self.memory.add("tool", self._format_tool_results(results))
+                            nxt = self._stream()
+                            if nxt is None:
+                                break
+                            print()
+                            final = nxt
+                    prompt_chars = sum(len(m.get("content", "")) for m in self.memory.get_context())
+                    self._show_stats(prompt_chars, len(final))
+                    self.memory.add("assistant", final)
+                    self.memory.cleanup()
+            else:
+                cl("ERR", "No previous query to retry.")
+
         elif cmd == "/heal":
             cl("SYS", self.healer.summary())
 
@@ -469,6 +512,7 @@ RULES:
   /model [name]      Show/change model (no args = list available)
   /clear             Reset conversation context
   /heal              Show self-healing history
+  /retry             Retry last query
   /info              System info
   /save [name]       Save session
   /load [name]       Load session

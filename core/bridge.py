@@ -3,6 +3,8 @@ import os
 import time
 import urllib.request
 import urllib.error
+import socket
+import ssl
 
 
 class APIError(Exception):
@@ -75,9 +77,31 @@ class Bridge:
             return urllib.request.urlopen(req, timeout=self.request_timeout)
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:500]
-            raise APIError(f"HTTP {e.code}: {detail}")
+            code = e.code
+            if code == 401:
+                hint = " — Invalid API key"
+            elif code == 429:
+                hint = " — Rate limited, waiting..."
+            elif code >= 500:
+                hint = " — NVIDIA API error (try again)"
+            else:
+                hint = ""
+            raise APIError(f"HTTP {code}: {detail}{hint}")
         except urllib.error.URLError as e:
-            raise APIError(f"Network: {e.reason}")
+            reason = str(e.reason)
+            if "timed out" in reason.lower():
+                hint = " — Connection timed out (check network / VPN)"
+            elif "no address" in reason.lower() or "name or service not known" in reason.lower():
+                hint = " — DNS failed (check internet)"
+            elif "connection refused" in reason.lower():
+                hint = " — Connection refused (API down?)"
+            elif "certificate" in reason.lower() or "cert" in reason.lower():
+                hint = " — SSL error (bad certificate)"
+            else:
+                hint = ""
+            raise APIError(f"Network: {reason}{hint}")
+        except socket.timeout:
+            raise APIError("Socket timed out — check your network connection")
 
     def _retry_post(self, messages, stream=False):
         self._enforce_rate_limit()

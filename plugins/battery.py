@@ -1,8 +1,11 @@
 import subprocess
 import re
+import shutil
 
 
 def run_battery(args=""):
+    if not shutil.which("pmset"):
+        return "Battery: not available on this device (pmset not found)"
     try:
         result = subprocess.run(
             ["pmset", "-g", "batt"],
@@ -16,7 +19,7 @@ def run_battery(args=""):
         remaining = time_match.group(1) if time_match else "?"
         return f"Battery: {pct}%, {charging}, {remaining} remaining"
     except Exception as e:
-        return f"Battery check failed: {e}"
+        return f"Battery: unavailable ({e})"
 
 
 SKILL = {
