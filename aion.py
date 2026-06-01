@@ -1042,31 +1042,43 @@ RULES:
     def _handle_event(self, raw):
         raw = raw.removeprefix("event:").strip()
         cl("SYS", f"System event: {raw}")
-        handlers = {
-            "wifi_joined": "WiFi connected — any action needed?",
-            "wifi_left": "WiFi disconnected — switched to mobile data",
-            "power_connected": "Device is now charging",
-            "power_disconnected": "Device is on battery now",
-            "lock": "Device locked — sleep mode",
-            "unlock": "Device unlocked — ready",
-        }
-        prompt = handlers.get(raw, f"Event: {raw} — respond if relevant")
-        self.memory.add("user", prompt)
-        response = self._stream(gray=False)
-        if response is None:
-            return
-        final = response
-        for rnd in range(5):
-            results = self._process_ai_response(final, heal=False)
-            if not results:
-                break
-            self.memory.add("tool", self._format_tool_results(results))
-            nxt = self._stream(gray=False)
-            if nxt is None:
-                break
-            final = nxt
-        self.memory.add("assistant", final)
-        self.memory.cleanup()
+
+        trigger_result = ""
+        if "triggers" in self.plugins:
+            try:
+                trigger_result = self.plugins["triggers"]["run"](f"process {raw}")
+            except Exception:
+                pass
+
+        if trigger_result == "ai" or trigger_result == "":
+            handlers = {
+                "wifi_joined": "WiFi connected — any action needed?",
+                "wifi_left": "WiFi disconnected — switched to mobile data",
+                "power_connected": "Device is now charging",
+                "power_disconnected": "Device is on battery now",
+                "lock": "Device locked — sleep mode",
+                "unlock": "Device unlocked — ready",
+            }
+            prompt = handlers.get(raw, f"Event: {raw} — respond if relevant")
+            self.memory.add("user", prompt)
+            response = self._stream(gray=False)
+            if response is None:
+                return
+            final = response
+            for rnd in range(2):
+                results = self._process_ai_response(final, heal=False)
+                if not results:
+                    break
+                self.memory.add("tool", self._format_tool_results(results))
+                nxt = self._stream(gray=False)
+                if nxt is None:
+                    break
+                final = nxt
+            self.memory.add("assistant", final)
+            self.memory.cleanup()
+        elif trigger_result.startswith("handled"):
+            cl("GRY", f"  Trigger handled: {trigger_result}")
+            audit_log({"t": time.time(), "action": "trigger", "event": raw, "result": trigger_result})
 
     def _listen_events(self, path):
         import ctypes

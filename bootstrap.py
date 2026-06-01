@@ -27,6 +27,8 @@ FILES = {
     "plugins/activator.py": "plugins/activator.py",
     "plugins/voice.py": "plugins/voice.py",
     "plugins/shortcuts_bridge.py": "plugins/shortcuts_bridge.py",
+    "plugins/triggers.py": "plugins/triggers.py",
+    "plugins/ios_system.py": "plugins/ios_system.py",
 }
 
 def main():
