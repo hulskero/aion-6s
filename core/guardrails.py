@@ -1,7 +1,5 @@
 import re
 
-from core.input_validator import sanitize_input
-
 MAX_CMD_LEN = 500
 # Version: 2026-05-31-1 - Enhanced guardrails for AION-6S
 
@@ -52,7 +50,7 @@ BLOCKED = [
     (r'(curl|wget|fetch)\s+.*\&\&.*\s*(?:sh|bash|zsh|python|python3|perl|ruby|ash|dash)', "download then execute"),
     (r'`.*(?:rm|dd|mkfs|reboot|shutdown|chmod|chown|passwd|su|sudo|chroot|mount|umount).*?`', "backtick with dangerous cmd"),
     (r'\$\s*\((?:rm|dd|mkfs|reboot|shutdown|chmod|chown|passwd|su|sudo|chroot|mount|umount)', "subshell with dangerous cmd"),
-    (r'\$\(.*\)', "subshell execution (blocked)"),
+    # $(...) handled safely by jailbreak._expand_subshells — no longer blocked here
     (r'`.*`', "backtick execution (blocked)"),
 
     # File system damage - protected directories

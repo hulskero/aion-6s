@@ -21,7 +21,7 @@ def sanitize(text):
     return text
 
 
-IOS_ABSENT = ["pmset", "free", "wlanconfig", "ps -ef", "launchctl", "system_profiler"]
+IOS_ABSENT = ["free", "wlanconfig", "system_profiler"]
 
 
 class SelfHeal:

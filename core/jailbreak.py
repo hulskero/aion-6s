@@ -1,5 +1,6 @@
 import subprocess
 import os
+import glob as globmod
 import urllib.parse
 
 from core.input_validator import safe_shell_split
@@ -10,6 +11,9 @@ SAFE_COMMANDS = {
     # System info — a-Shell compatible
     'uname': None, 'df': None, 'hostname': None, 'id': None,
     'whoami': None, 'pwd': None, 'date': None, 'uptime': None,
+    'sysctl': None, 'vm_stat': None,
+    # Hardware / IOKit
+    'ioreg': None, 'pmset': None,
     # Network
     'curl': None, 'ping': None, 'nslookup': None, 'dig': None,
     'ifconfig': None, 'netstat': None,
@@ -22,6 +26,8 @@ SAFE_COMMANDS = {
     # iOS / a-Shell
     'open': None, 'sbreload': None, 'uicache': None,
     'shortcuts': None,
+    # Audio / haptics
+    'afplay': None,
     # Scripting
     'python3': None, 'python': None, 'printenv': None, 'env': None,
     # Editors
@@ -31,14 +37,65 @@ SAFE_COMMANDS = {
     # Disk
     'mount': None, 'stat': None, 'du': None,
     # Package management (Procursus)
-    'apt': None, 'dpkg': None,
+    'apt': None, 'apt-get': None, 'dpkg': None,
     # Source control / download
     'git': None, 'wget': None, 'rsync': None, 'curl': None,
     # Archive
     'unzip': None, 'tar': None, 'gzip': None, 'bzip2': None,
     # Launch / service
     'launchctl': None,
+    # NFC / RemoteCompanion
+    'rc': None,
 }
+
+
+def _split_pipeline(cmd):
+    """Split command on | outside quotes. Returns list of command strings."""
+    parts = []
+    current = []
+    in_sq = False
+    in_dq = False
+    for char in cmd:
+        if char == "'" and not in_dq:
+            in_sq = not in_sq
+        elif char == '"' and not in_sq:
+            in_dq = not in_dq
+        elif char == '|' and not in_sq and not in_dq:
+            parts.append(''.join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    parts.append(''.join(current).strip())
+    return [p for p in parts if p]
+
+
+def _has_glob(pattern):
+    """Check if a string contains unquoted glob characters."""
+    in_sq = False
+    in_dq = False
+    for char in pattern:
+        if char == "'" and not in_dq:
+            in_sq = not in_sq
+        elif char == '"' and not in_sq:
+            in_dq = not in_dq
+        if not in_sq and not in_dq and char in ('*', '?', '['):
+            return True
+    return False
+
+
+def _expand_glob_args(argv):
+    """Expand glob patterns in argv list. Non-matching globs pass through literally."""
+    expanded = []
+    for arg in argv:
+        if _has_glob(arg):
+            matches = sorted(globmod.glob(arg))
+            if matches:
+                expanded.extend(matches)
+            else:
+                expanded.append(arg)
+        else:
+            expanded.append(arg)
+    return expanded
 
 
 def _tokenize(cmd):
@@ -51,25 +108,32 @@ def _tokenize(cmd):
 
     # Allow known safe commands
     if cmd_name in SAFE_COMMANDS:
-        # If command has strict whitelist, validate args
-        allowed_args = SAFE_COMMANDS[cmd_name]
-        if allowed_args is not None:
-            for arg in parts[1:]:
-                if arg not in allowed_args and not arg.startswith('-'):
-                    # Allow unknown args for flexibility, but log warning
-                    pass
         return parts
 
     # Command not in SAFE_COMMANDS whitelist
     return None
 
 
-class Jailbreak:
-    __slots__ = ["mode", "workspace"]
+# Module-level cached Jailbreak instance for plugins
+_SYSTEM_JB = None
 
-    def __init__(self, mode="auto", workspace=None):
+
+def safe_exec(cmd, timeout=30):
+    """Central safe execution for plugins. Same security as Jailbreak.run().
+    Use this instead of raw subprocess.run() in plugin code."""
+    global _SYSTEM_JB
+    if _SYSTEM_JB is None:
+        _SYSTEM_JB = Jailbreak(timeout=timeout)
+    return _SYSTEM_JB.run(cmd)
+
+
+class Jailbreak:
+    __slots__ = ["mode", "workspace", "timeout"]
+
+    def __init__(self, mode="auto", workspace=None, timeout=30):
         self.mode = self._detect(mode)
         self.workspace = workspace
+        self.timeout = timeout
 
     def _detect(self, mode):
         if mode != "auto":
@@ -87,11 +151,36 @@ class Jailbreak:
         if os.path.isdir(jb_bin) and jb_bin not in os.environ.get("PATH", ""):
             os.environ["PATH"] = f"{jb_bin}:{os.environ.get('PATH', '')}"
 
-    def run(self, cmd, timeout=10):
-        """Execute command safely. Always uses argv (shell=False), never shell injection."""
+    @staticmethod
+    def _expand_subshells(cmd):
+        """Replace $(cmd) with its output. Handles nesting via recursion."""
+        import re as _re
+        pattern = r'\$\(([^()]+|(?:[^()]*\([^()]*\)[^()]*)*)\)'
+        while True:
+            m = _re.search(pattern, cmd)
+            if not m:
+                break
+            inner = m.group(1)
+            r = safe_exec(inner.strip(), timeout=15)
+            replacement = r["stdout"].strip() if r["success"] else ""
+            cmd = cmd[:m.start()] + replacement + cmd[m.end():]
+        return cmd
+
+    def run(self, cmd, timeout=None):
+        """Execute command safely. Handles pipes, globs, subshells, always uses argv (shell=False).
+        Default timeout from config, overridable per-call."""
+        if timeout is None:
+            timeout = self.timeout
+        cmd = self._expand_subshells(cmd)
+        pipeline = _split_pipeline(cmd)
+        if len(pipeline) > 1:
+            return self._run_pipeline(pipeline, timeout)
+
         argv = _tokenize(cmd)
         if argv is None:
-            return {"success": False, "stdout": "", "stderr": "Command not allowed or invalid syntax", "code": -1}
+            cmd_name = cmd.strip().split()[0] if cmd.strip() else "?"
+            return {"success": False, "stdout": "", "stderr": f"Command not allowed: '{cmd_name}'. Check SAFE_COMMANDS or use @plugin.", "code": -1}
+        argv = _expand_glob_args(argv)
         try:
             result = subprocess.run(
                 argv, shell=False, capture_output=True, text=True, timeout=timeout,
@@ -107,6 +196,50 @@ class Jailbreak:
             return {"success": False, "stdout": "", "stderr": "TIMEOUT", "code": -1}
         except FileNotFoundError:
             return {"success": False, "stdout": "", "stderr": f"Command not found: {argv[0] if argv else 'unknown'}", "code": 127}
+        except Exception as e:
+            return {"success": False, "stdout": "", "stderr": str(e)[:500], "code": -1}
+
+    def _run_pipeline(self, segments, timeout):
+        """Run a pipeline of commands connected by pipes. No shell=True needed."""
+        tokenized = []
+        for seg in segments:
+            argv = _tokenize(seg)
+            if argv is None:
+                cmd_name = seg.strip().split()[0] if seg.strip() else "?"
+                return {"success": False, "stdout": "", "stderr": f"Command not allowed in pipeline: '{cmd_name}'", "code": -1}
+            argv = _expand_glob_args(argv)
+            tokenized.append(argv)
+
+        try:
+            procs = []
+            prev = None
+            for argv in tokenized:
+                kwargs = dict(
+                    args=argv,
+                    shell=False,
+                    stdin=subprocess.PIPE if prev is None else prev.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=self.workspace,
+                )
+                p = subprocess.Popen(**kwargs)
+                if prev:
+                    prev.stdout.close()
+                procs.append(p)
+                prev = p
+
+            stdout, stderr = procs[-1].communicate(timeout=timeout)
+            rc = procs[-1].returncode
+            return {
+                "success": rc == 0,
+                "stdout": stdout.decode("utf-8", errors="replace") if stdout else "",
+                "stderr": stderr.decode("utf-8", errors="replace") if stderr else "",
+                "code": rc,
+            }
+        except subprocess.TimeoutExpired:
+            for p in procs:
+                p.kill()
+            return {"success": False, "stdout": "", "stderr": "TIMEOUT", "code": -1}
         except Exception as e:
             return {"success": False, "stdout": "", "stderr": str(e)[:500], "code": -1}
 

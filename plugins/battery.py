@@ -1,18 +1,15 @@
-import subprocess
 import re
 import shutil
+from core.jailbreak import safe_exec
 
 
 def _ioreg_batt():
     """Read battery via ioreg (works on macOS, may work on jailbroken iOS)."""
     try:
-        r = subprocess.run(
-            ["ioreg", "-w", "0", "-rc", "AppleSmartBattery"],
-            capture_output=True, text=True, timeout=8
-        )
-        if r.returncode != 0 or not r.stdout.strip():
+        r = safe_exec("ioreg -w 0 -rc AppleSmartBattery", timeout=8)
+        if not r["success"] or not r["stdout"].strip():
             return None
-        out = r.stdout
+        out = r["stdout"]
         def get(k):
             m = re.search(rf'"{k}"\s*=\s*(\S+)', out)
             return m.group(1).rstrip(",") if m else "?"
@@ -26,11 +23,10 @@ def _ioreg_batt():
 
 def _pmset_batt():
     try:
-        r = subprocess.run(
-            ["pmset", "-g", "batt"],
-            capture_output=True, text=True, timeout=5
-        )
-        output = r.stdout + r.stderr
+        r = safe_exec("pmset -g batt", timeout=5)
+        if not r["success"] and not r["stdout"]:
+            return None
+        output = r["stdout"] + r["stderr"]
         m = re.search(r'(\d+)%', output)
         pct = m.group(1) if m else "?"
         charging = "charging" if "charging" in output.lower() or "AC" in output or "connected" in output.lower() else "discharging"

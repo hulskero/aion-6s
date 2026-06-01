@@ -64,8 +64,25 @@ def _obfuscate_secrets(text):
     text = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '[REDACTED_EMAIL]', text)
     return text
 
+MAX_AUDIT_BYTES = 1_048_576  # 1 MB
+
+
+def _rotate_audit_log():
+    """Truncate audit log to last 1000 lines if it exceeds MAX_AUDIT_BYTES."""
+    try:
+        if os.path.exists(AUDIT_LOG) and os.path.getsize(AUDIT_LOG) > MAX_AUDIT_BYTES:
+            with open(AUDIT_LOG) as f:
+                lines = f.readlines()
+            if len(lines) > 1000:
+                with open(AUDIT_LOG, "w") as f:
+                    f.writelines(lines[-1000:])
+    except Exception:
+        pass
+
+
 def audit_log(entry):
     """Thread-safe audit logging with file locking and secret obfuscation."""
+    _rotate_audit_log()
     try:
         # Create a copy of entry to avoid modifying original
         entry_copy = copy.deepcopy(entry)
@@ -270,7 +287,11 @@ class AION:
         self._check_config_security()
 
         self.bridge = Bridge(self.config)
-        self.jailbreak = Jailbreak(self.config.get("jailbreak_mode", "auto"), workspace=self.workspace)
+        self.jailbreak = Jailbreak(
+            self.config.get("jailbreak_mode", "auto"),
+            workspace=self.workspace,
+            timeout=self.config.get("request_timeout", 30),
+        )
         self.memory = MemoryManager(self.config.get("max_context_pairs", 5))
         self.healer = SelfHeal(self.bridge, self.config.get("max_heal_attempts", 3))
         self.plugins = load_plugins(os.path.join(os.path.dirname(__file__), "plugins"))
@@ -691,8 +712,51 @@ RULES:
             for k, v in self.plugins.items():
                 cl("SYS", f"  {k}: {v['description']}")
 
+        elif line.startswith("/plugin install"):
+            from plugins import install_plugin
+            parts = line.split(None, 3)
+            if len(parts) < 3:
+                cl("ERR", "Usage: /plugin install <name> [url]")
+                return
+            p_name = parts[2]
+            p_url = parts[3] if len(parts) > 3 else None
+            if not p_url:
+                cl("ERR", "Usage: /plugin install <name> <url>")
+                return
+            plugin, err = install_plugin(
+                p_name, p_url,
+                os.path.join(os.path.dirname(__file__), "plugins")
+            )
+            if err:
+                cl("ERR", err)
+            else:
+                self.plugins[plugin["name"]] = plugin
+                self.system_prompt = self._build_prompt()
+                cl("SYS", f"Plugin '{plugin['name']}' installed and loaded.")
+
+        elif line.startswith("/plugin remove"):
+            from plugins import remove_plugin
+            parts = line.split(None, 2)
+            if len(parts) < 3:
+                cl("ERR", "Usage: /plugin remove <name>")
+                return
+            ok, err = remove_plugin(
+                parts[2],
+                os.path.join(os.path.dirname(__file__), "plugins")
+            )
+            if err:
+                cl("ERR", err)
+            else:
+                self.plugins = {
+                    k: v for k, v in self.plugins.items()
+                    if v["name"] != parts[2]
+                }
+                self.system_prompt = self._build_prompt()
+                cl("SYS", f"Plugin '{parts[2]}' removed.")
+
         elif cmd == "/clear":
             self.memory.set_system(self.system_prompt)
+            reset_confirm()
             cl("SYS", "Context cleared.")
 
         elif cmd == "/retry":
@@ -782,6 +846,8 @@ RULES:
   /save [name]       Save session
   /load [name]       Load session
   /reload            Reload plugins
+  /plugin install <name> <url>   Install plugin from URL
+  /plugin remove <name>         Remove a plugin
   /status            System status
   /log               Show last audit log entries
   /update            Download latest files from GitHub
