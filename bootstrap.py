@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""AION-6S bootstrap — stáhne kompletní repozitář z GitHubu.
-Použití na iPhonu (a-Shell):  python3 bootstrap.py  &&  cd aion-6s  &&  python3 aion.py
+"""AION-6S bootstrap — download full repo from GitHub.
+Usage on iPhone (a-Shell):  python3 bootstrap.py  &&  cd aion-6s  &&  python3 aion.py
 """
 import os, sys, urllib.request, json
 
@@ -45,8 +45,8 @@ def main():
             ok += 1
         except Exception as e:
             sys.stdout.write(f"FAIL: {e}\n")
-    print(f"\nStaženo {ok}/{total} souborů do {root}")
-    print(f"\nSpusť:")
+    print(f"\nDownloaded {ok}/{total} files to {root}")
+    print(f"\nRun:")
     print(f"  cd {root}")
     print(f"  python3 aion.py")
 
