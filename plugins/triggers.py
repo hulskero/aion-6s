@@ -153,9 +153,16 @@ def run_triggers(args=""):
 
 
 def _notify_post(name):
+    if not name:
+        return
     try:
         import ctypes
-        libc = ctypes.cdll.LoadLibrary("libc.dylib")
+        import ctypes.util
+        libc_path = ctypes.util.find_library("c")
+        if not libc_path:
+            return
+        libc = ctypes.cdll.LoadLibrary(libc_path)
+        libc.notify_post.argtypes = [ctypes.c_char_p]
         libc.notify_post(name.encode())
     except Exception:
         pass

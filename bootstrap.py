@@ -25,7 +25,6 @@ FILES = {
     "plugins/webfetch.py": "plugins/webfetch.py",
     "plugins/weather.py": "plugins/weather.py",
     "plugins/activator.py": "plugins/activator.py",
-    "plugins/voice.py": "plugins/voice.py",
     "plugins/shortcuts_bridge.py": "plugins/shortcuts_bridge.py",
     "plugins/triggers.py": "plugins/triggers.py",
     "plugins/ios_system.py": "plugins/ios_system.py",

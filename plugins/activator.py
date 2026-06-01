@@ -1,4 +1,3 @@
-import shutil
 from core.jailbreak import safe_exec
 
 ACTIVATOR_EVENTS = [

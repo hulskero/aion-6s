@@ -1,4 +1,5 @@
 import shutil
+import urllib.parse
 from core.jailbreak import safe_exec
 
 HELP_TEXT = """\
@@ -51,9 +52,9 @@ def _run_via_springcuts(name, inp=""):
 
 def _run_via_url(name, inp=""):
     import subprocess
-    url = f"shortcuts://run-shortcut?name={name.replace(' ', '%20')}"
+    url = f"shortcuts://run-shortcut?name={urllib.parse.quote(name, safe='')}"
     if inp:
-        url += f"&input=text&text={inp.replace(' ', '%20')}"
+        url += f"&input=text&text={urllib.parse.quote(inp, safe='')}"
     try:
         subprocess.run(["open", url], capture_output=True, timeout=5)
     except Exception:
@@ -87,7 +88,8 @@ def run_shortcuts_bridge(args=""):
             if r["success"] and r["stdout"].strip():
                 return f"Shortcut '{name}':\n{r['stdout'][:2000]}"
         if has_shortcuts:
-            r = safe_exec(f"shortcuts run '{name}'", timeout=30)
+            safe_name = name.replace("'", "'\\''")
+            r = safe_exec(f"shortcuts run '{safe_name}'", timeout=30)
             if r["success"]:
                 return f"Shortcut '{name}' completed."
         # Fallback: x-callback-url

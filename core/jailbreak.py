@@ -1,7 +1,9 @@
 import subprocess
 import os
+import re as _re
 import glob as globmod
 import urllib.parse
+import threading
 
 from core.input_validator import safe_shell_split
 
@@ -25,7 +27,8 @@ SAFE_COMMANDS = {
     'find', 'basename', 'dirname', 'realpath',
     # iOS / a-Shell
     'open', 'sbreload', 'uicache',
-    'shortcuts',
+    'shortcuts', 'springcuts',
+    'which', 'activator',
     # Audio / haptics
     'afplay',
     # Scripting
@@ -116,6 +119,7 @@ def _tokenize(cmd):
 
 # Module-level cached Jailbreak instance for plugins
 _SYSTEM_JB = None
+_JB_LOCK = threading.Lock()
 
 
 def safe_exec(cmd, timeout=30, jb=None):
@@ -126,7 +130,9 @@ def safe_exec(cmd, timeout=30, jb=None):
     if jb is not None:
         return jb.run(cmd, timeout=timeout)
     if _SYSTEM_JB is None:
-        _SYSTEM_JB = Jailbreak(timeout=timeout)
+        with _JB_LOCK:
+            if _SYSTEM_JB is None:
+                _SYSTEM_JB = Jailbreak(timeout=timeout)
     return _SYSTEM_JB.run(cmd)
 
 
@@ -159,14 +165,12 @@ class Jailbreak:
         """Replace $(cmd) with its output. Max nesting depth = 3."""
         if _depth > 3:
             return cmd
-        import re as _re
         pattern = r'\$\(([^()]+|(?:[^()]*\([^()]*\)[^()]*)*)\)'
         while True:
             m = _re.search(pattern, cmd)
             if not m:
                 break
             inner = m.group(1)
-            inner = Jailbreak._expand_subshells(inner, _depth + 1)
             r = safe_exec(inner.strip(), timeout=15)
             replacement = r["stdout"].strip() if r["success"] else ""
             cmd = cmd[:m.start()] + replacement + cmd[m.end():]
@@ -216,8 +220,8 @@ class Jailbreak:
             argv = _expand_glob_args(argv)
             tokenized.append(argv)
 
+        procs = []
         try:
-            procs = []
             prev = None
             for argv in tokenized:
                 kwargs = dict(
@@ -245,9 +249,19 @@ class Jailbreak:
         except subprocess.TimeoutExpired:
             for p in procs:
                 p.kill()
+            for p in procs:
+                p.wait()
             return {"success": False, "stdout": "", "stderr": "TIMEOUT", "code": -1}
         except Exception as e:
             return {"success": False, "stdout": "", "stderr": str(e)[:500], "code": -1}
+        finally:
+            for p in procs:
+                if p.returncode is None:
+                    try:
+                        p.kill()
+                        p.wait(timeout=5)
+                    except Exception:
+                        pass
 
     def run_shortcut(self, action, name=None, input_data=None):
         if action == "list":
