@@ -9,43 +9,43 @@ from core.input_validator import safe_shell_split
 # Maps common commands to safe handlers
 SAFE_COMMANDS = {
     # System info — a-Shell compatible
-    'uname': None, 'df': None, 'hostname': None, 'id': None,
-    'whoami': None, 'pwd': None, 'date': None, 'uptime': None,
-    'sysctl': None, 'vm_stat': None,
+    'uname', 'df', 'hostname', 'id',
+    'whoami', 'pwd', 'date', 'uptime',
+    'sysctl', 'vm_stat',
     # Hardware / IOKit
-    'ioreg': None, 'pmset': None,
+    'ioreg', 'pmset',
     # Network
-    'curl': None, 'ping': None, 'nslookup': None, 'dig': None,
-    'ifconfig': None, 'netstat': None,
+    'curl', 'ping', 'nslookup', 'dig',
+    'ifconfig', 'netstat',
     # Filesystem
-    'ls': None, 'cat': None, 'echo': None, 'head': None, 'tail': None,
-    'wc': None, 'sort': None, 'grep': None, 'awk': None, 'sed': None,
-    'cp': None, 'mv': None, 'mkdir': None, 'rm': None, 'touch': None,
-    'chmod': None, 'chown': None,
-    'find': None, 'basename': None, 'dirname': None, 'realpath': None,
+    'ls', 'cat', 'echo', 'head', 'tail',
+    'wc', 'sort', 'grep', 'awk', 'sed',
+    'cp', 'mv', 'mkdir', 'rm', 'touch',
+    'chmod', 'chown',
+    'find', 'basename', 'dirname', 'realpath',
     # iOS / a-Shell
-    'open': None, 'sbreload': None, 'uicache': None,
-    'shortcuts': None,
+    'open', 'sbreload', 'uicache',
+    'shortcuts',
     # Audio / haptics
-    'afplay': None,
+    'afplay',
     # Scripting
-    'python3': None, 'python': None, 'printenv': None, 'env': None,
+    'python3', 'python', 'printenv', 'env',
     # Editors
-    'vim': None, 'pico': None, 'ed': None, 'nano': None,
+    'vim', 'pico', 'ed', 'nano',
     # Process
-    'ps': None, 'kill': None, 'pkill': None, 'killall': None,
+    'ps', 'kill', 'pkill', 'killall',
     # Disk
-    'mount': None, 'stat': None, 'du': None,
+    'mount', 'stat', 'du',
     # Package management (Procursus)
-    'apt': None, 'apt-get': None, 'dpkg': None,
+    'apt', 'apt-get', 'dpkg',
     # Source control / download
-    'git': None, 'wget': None, 'rsync': None, 'curl': None,
+    'git', 'wget', 'rsync',
     # Archive
-    'unzip': None, 'tar': None, 'gzip': None, 'bzip2': None,
+    'unzip', 'tar', 'gzip', 'bzip2',
     # Launch / service
-    'launchctl': None,
+    'launchctl',
     # NFC / RemoteCompanion
-    'rc': None,
+    'rc',
 }
 
 
@@ -118,10 +118,13 @@ def _tokenize(cmd):
 _SYSTEM_JB = None
 
 
-def safe_exec(cmd, timeout=30):
+def safe_exec(cmd, timeout=30, jb=None):
     """Central safe execution for plugins. Same security as Jailbreak.run().
-    Use this instead of raw subprocess.run() in plugin code."""
+    Use this instead of raw subprocess.run() in plugin code.
+    Pass jb=<Jailbreak instance> to use the main instance (with workspace)."""
     global _SYSTEM_JB
+    if jb is not None:
+        return jb.run(cmd, timeout=timeout)
     if _SYSTEM_JB is None:
         _SYSTEM_JB = Jailbreak(timeout=timeout)
     return _SYSTEM_JB.run(cmd)
@@ -152,8 +155,10 @@ class Jailbreak:
             os.environ["PATH"] = f"{jb_bin}:{os.environ.get('PATH', '')}"
 
     @staticmethod
-    def _expand_subshells(cmd):
-        """Replace $(cmd) with its output. Handles nesting via recursion."""
+    def _expand_subshells(cmd, _depth=0):
+        """Replace $(cmd) with its output. Max nesting depth = 3."""
+        if _depth > 3:
+            return cmd
         import re as _re
         pattern = r'\$\(([^()]+|(?:[^()]*\([^()]*\)[^()]*)*)\)'
         while True:
@@ -161,6 +166,7 @@ class Jailbreak:
             if not m:
                 break
             inner = m.group(1)
+            inner = Jailbreak._expand_subshells(inner, _depth + 1)
             r = safe_exec(inner.strip(), timeout=15)
             replacement = r["stdout"].strip() if r["success"] else ""
             cmd = cmd[:m.start()] + replacement + cmd[m.end():]

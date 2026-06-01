@@ -11,7 +11,7 @@ try:
     import fcntl
 except ImportError:
     fcntl = None
-import copy
+
 import itertools
 import threading
 try:
@@ -52,10 +52,21 @@ def cl(color, text):
     print(f"{ANSI[color]}{text}{ANSI['RST']}")
 
 
+_SECRET_INDICATORS = ("nvapi-", "sk-", "ghp_", "@")
+_SECRET_PATTERNS = [
+    (re.compile(r'nvapi-[A-Za-z0-9\-_]{20,}'), 'nvapi-[REDACTED]'),
+    (re.compile(r'sk-[A-Za-z0-9]{20,}'), 'sk-[REDACTED]'),
+    (re.compile(r'ghp_[A-Za-z0-9]{20,}'), 'ghp_[REDACTED]'),
+    (re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'), '[REDACTED_EMAIL]'),
+]
+
+
 def _obfuscate_secrets(text):
-    """Obfuscate sensitive data like API keys in text."""
-    if not isinstance(text, str):
+    if not any(ind in text for ind in _SECRET_INDICATORS):
         return text
+    for pat, repl in _SECRET_PATTERNS:
+        text = pat.sub(repl, text)
+    return text
     # Obfuscate NVIDIA API keys
     text = re.sub(r'nvapi-[A-Za-z0-9\-_]{20,}', 'nvapi-[REDACTED]', text)
     # Obfuscate other potential secrets
@@ -65,17 +76,21 @@ def _obfuscate_secrets(text):
     return text
 
 MAX_AUDIT_BYTES = 1_048_576  # 1 MB
+_audit_count = 0
 
 
 def _rotate_audit_log():
-    """Truncate audit log to last 1000 lines if it exceeds MAX_AUDIT_BYTES."""
+    """Truncate audit log to last 1000 lines if >1MB. Checks every 10 writes."""
+    global _audit_count
+    _audit_count += 1
+    if _audit_count % 10 != 0:
+        return
     try:
-        if os.path.exists(AUDIT_LOG) and os.path.getsize(AUDIT_LOG) > MAX_AUDIT_BYTES:
+        if os.path.getsize(AUDIT_LOG) > MAX_AUDIT_BYTES:
             with open(AUDIT_LOG) as f:
                 lines = f.readlines()
-            if len(lines) > 1000:
-                with open(AUDIT_LOG, "w") as f:
-                    f.writelines(lines[-1000:])
+            with open(AUDIT_LOG, "w") as f:
+                f.writelines(lines[-1000:])
     except Exception:
         pass
 
@@ -84,41 +99,19 @@ def audit_log(entry):
     """Thread-safe audit logging with file locking and secret obfuscation."""
     _rotate_audit_log()
     try:
-        # Create a copy of entry to avoid modifying original
-        entry_copy = copy.deepcopy(entry)
-
-        # Obfuscate secrets in the entry
-        def obfuscate_dict(d):
-            if isinstance(d, dict):
-                for key, value in d.items():
-                    if isinstance(value, str):
-                        d[key] = _obfuscate_secrets(value)
-                    elif isinstance(value, dict):
-                        obfuscate_dict(value)
-                    elif isinstance(value, list):
-                        for i, item in enumerate(value):
-                            if isinstance(item, str):
-                                value[i] = _obfuscate_secrets(item)
-                            elif isinstance(item, dict):
-                                obfuscate_dict(item)
-            elif isinstance(d, list):
-                for i, item in enumerate(d):
-                    if isinstance(item, str):
-                        d[i] = _obfuscate_secrets(item)
-                    elif isinstance(item, dict):
-                        obfuscate_dict(item)
-                    elif isinstance(item, list):
-                        for j, subitem in enumerate(item):
-                            if isinstance(subitem, str):
-                                item[j] = _obfuscate_secrets(subitem)
-
-        obfuscate_dict(entry_copy)
+        # Shallow copy + obfuscate only cmd/reason (avoids deepcopy + recursive walk)
+        obfuscated = {}
+        for k, v in entry.items():
+            if isinstance(v, str):
+                obfuscated[k] = _obfuscate_secrets(v)
+            else:
+                obfuscated[k] = v
 
         with open(AUDIT_LOG, "a") as f:
             if fcntl:
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
-                f.write(json.dumps(entry_copy) + "\n")
+                f.write(json.dumps(obfuscated) + "\n")
             finally:
                 if fcntl:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
@@ -500,16 +493,16 @@ RULES:
                 lines.append(f"[cmd] $ {inp}  [{status}]")
                 out = (r.get("stdout") or "").rstrip()
                 if out:
-                    lines.append(out[:2000])
+                    lines.append(out[:500])
             elif kind == "plugin":
                 lines.append(f"[plugin] {inp}")
                 out = (r.get("stdout") or "").rstrip()
                 if out:
-                    lines.append(out[:2000])
+                    lines.append(out[:500])
             elif kind == "shortcut":
                 lines.append(f"[shortcut] {inp}")
         result = "\n".join(lines)
-        return result[:5000] if len(result) > 5000 else result
+        return result[:2000] if len(result) > 2000 else result
 
     def _do_update(self, args=""):
         import subprocess as _sp

@@ -127,16 +127,20 @@ DESTRUCTIVE = [
 
 _proactive_yes = False
 
+# Pre-compiled regex patterns (avoids re-compilation on every check())
+_BLOCKED_RE = [(re.compile(p, re.IGNORECASE), r) for p, r in BLOCKED]
+_DESTRUCTIVE_RE = [re.compile(p, re.IGNORECASE) for p in DESTRUCTIVE]
+
 
 def check(cmd):
     """Returns (blocked_reason, is_destructive)"""
     if len(cmd) > MAX_CMD_LEN:
         return (f"[BLOCKED] Command exceeds {MAX_CMD_LEN} chars ({len(cmd)})", False)
 
-    for pat, reason in BLOCKED:
-        if re.search(pat, cmd, re.IGNORECASE):
+    for pat, reason in _BLOCKED_RE:
+        if pat.search(cmd):
             return (f"[BLOCKED] {reason}", False)
-    is_dest = any(re.search(p, cmd, re.IGNORECASE) for p in DESTRUCTIVE)
+    is_dest = any(p.search(cmd) for p in _DESTRUCTIVE_RE)
     return (None, is_dest)
 
 

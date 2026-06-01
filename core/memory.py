@@ -36,13 +36,11 @@ class MemoryManager:
         return self.context
 
     def _smart_gc(self):
-        if self._msg_count % 5 == 0:
-            gc.collect()
+        if self._msg_count % 20 == 0:
             gc.collect()
 
     def cleanup(self):
-        if self._msg_count % 3 == 0:
-            gc.collect()
+        pass
 
     def count_chars(self):
         total = 0
