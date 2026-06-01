@@ -24,6 +24,9 @@ FILES = {
     "plugins/location.py": "plugins/location.py",
     "plugins/webfetch.py": "plugins/webfetch.py",
     "plugins/weather.py": "plugins/weather.py",
+    "plugins/activator.py": "plugins/activator.py",
+    "plugins/voice.py": "plugins/voice.py",
+    "plugins/shortcuts_bridge.py": "plugins/shortcuts_bridge.py",
 }
 
 def main():

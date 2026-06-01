@@ -19,6 +19,11 @@ try:
 except ImportError:
     pass
 
+# Tune GC for 2GB RAM: freeze startup objects, raise gen0 threshold
+gc.collect(2)
+gc.freeze()
+gc.set_threshold(50_000, 10, 10)
+
 
 ANSI = {
     "AI": "\033[94m",
@@ -743,6 +748,29 @@ RULES:
                 self.system_prompt = self._build_prompt()
                 cl("SYS", f"Plugin '{parts[2]}' removed.")
 
+        elif cmd.startswith("/event"):
+            parts = cmd.split(None, 2)
+            subcmd = parts[1].strip().lower() if len(parts) > 1 else ""
+            if subcmd == "start":
+                fifo = "/tmp/aion.event"
+                self._ensure_fifo(fifo)
+                cl("SYS", f"Event listener on {fifo} — Ctrl+C to stop")
+                self._listen_events(fifo)
+            elif subcmd == "once":
+                fifo = "/tmp/aion.event"
+                self._ensure_fifo(fifo)
+                cl("SYS", "Waiting for one event...")
+                event = self._read_event(fifo, timeout=30)
+                if event:
+                    cl("SYS", f"Event: {event}")
+                    self._handle_event(event)
+            else:
+                cl("SYS",
+                    "/event start  — listen for Activator events (Ctrl+C to exit)\n"
+                    "/event once   — wait for one event, then stop\n\n"
+                    f"Activator setup: trigger → Run Command →\n"
+                    f'  echo "event:<name>" > /tmp/aion.event')
+
         elif cmd == "/clear":
             self.memory.set_system(self.system_prompt)
             reset_confirm()
@@ -837,6 +865,7 @@ RULES:
   /reload            Reload plugins
   /plugin install <name> <url>   Install plugin from URL
   /plugin remove <name>         Remove a plugin
+  /event start / once           Headless event listener for Activator
   /status            System status
   /log               Show last audit log entries
   /update            Download latest files from GitHub
@@ -963,6 +992,78 @@ RULES:
         latency = getattr(self.bridge, "_last_latency", 0)
         cl("SYS", f"  ↑{prompt} ↓{completion} | {latency:.1f}s | {self.config['model']}")
 
+    def _ensure_fifo(self, path):
+        try:
+            if not os.path.exists(path):
+                os.mkfifo(path, 0o644)
+        except AttributeError:
+            cl("WARN", "mkfifo unavailable — event listener disabled")
+        except FileExistsError:
+            pass
+        except Exception:
+            pass
+
+    def _read_event(self, path, timeout=30):
+        import select
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            r, _, _ = select.select([fd], [], [], timeout)
+            if r:
+                data = os.read(fd, 4096).decode("utf-8", errors="replace").strip()
+                os.close(fd)
+                return data
+            os.close(fd)
+        except Exception:
+            pass
+        return None
+
+    def _handle_event(self, raw):
+        raw = raw.removeprefix("event:").strip()
+        cl("SYS", f"System event: {raw}")
+        handlers = {
+            "wifi_joined": "WiFi connected — any action needed?",
+            "wifi_left": "WiFi disconnected — switched to mobile data",
+            "power_connected": "Device is now charging",
+            "power_disconnected": "Device is on battery now",
+            "lock": "Device locked — sleep mode",
+            "unlock": "Device unlocked — ready",
+        }
+        prompt = handlers.get(raw, f"Event: {raw} — respond if relevant")
+        self.memory.add("user", prompt)
+        response = self._stream(gray=False)
+        if response is None:
+            return
+        final = response
+        for rnd in range(5):
+            results = self._process_ai_response(final, heal=False)
+            if not results:
+                break
+            self.memory.add("tool", self._format_tool_results(results))
+            nxt = self._stream(gray=False)
+            if nxt is None:
+                break
+            final = nxt
+        self.memory.add("assistant", final)
+        self.memory.cleanup()
+
+    def _listen_events(self, path):
+        import select
+        try:
+            self._ensure_fifo(path)
+            cl("SYS", f"Listening on FIFO {path} — Activator sends events here")
+            while True:
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                r, _, _ = select.select([fd], [], [], 1.0)
+                if r:
+                    data = os.read(fd, 4096).decode("utf-8", errors="replace").strip()
+                    if data:
+                        self._handle_event(data)
+                os.close(fd)
+        except KeyboardInterrupt:
+            cl("SYS", "Event listener stopped.")
+        except Exception as e:
+            cl("ERR", f"Event error: {e}")
+
     def run(self):
         MAX_TOOL_ROUNDS = 5
         cl("SYS", f"{ANSI['BOLD']}AION-6S{ANSI['RST']} ready  |  {len(self.plugins)} plugin(s)  |  {self.config['model']}")
@@ -1040,4 +1141,10 @@ RULES:
 
 
 if __name__ == "__main__":
-    AION().run()
+    import sys as _sys
+    if "--headless" in _sys.argv[1:]:
+        app = AION()
+        cl("SYS", "Headless mode — listening for system events (Ctrl+C to stop)")
+        app._listen_events("/tmp/aion.event")
+    else:
+        AION().run()
