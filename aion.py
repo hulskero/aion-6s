@@ -14,9 +14,23 @@ except ImportError:
 
 import itertools
 import threading
+
+# Shrink thread stack from default 512KB → 128KB (saves ~75% per thread)
+threading.stack_size(128 * 1024)
+
 try:
     import readline
 except ImportError:
+    pass
+
+# Lower recursion limit — safer on 2GB with 128KB stack
+sys.setrecursionlimit(500)
+
+# Use spawn instead of fork for subprocesses — avoids COW memory bloat
+import multiprocessing
+try:
+    multiprocessing.set_start_method("spawn", force=True)
+except RuntimeError:
     pass
 
 # Tune GC for 2GB RAM: freeze startup objects, raise gen0 threshold
@@ -71,13 +85,6 @@ def _obfuscate_secrets(text):
         return text
     for pat, repl in _SECRET_PATTERNS:
         text = pat.sub(repl, text)
-    return text
-    # Obfuscate NVIDIA API keys
-    text = re.sub(r'nvapi-[A-Za-z0-9\-_]{20,}', 'nvapi-[REDACTED]', text)
-    # Obfuscate other potential secrets
-    text = re.sub(r'sk-[A-Za-z0-9]{20,}', 'sk-[REDACTED]', text)
-    text = re.sub(r'ghp_[A-Za-z0-9]{20,}', 'ghp_[REDACTED]', text)
-    text = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '[REDACTED_EMAIL]', text)
     return text
 
 MAX_AUDIT_BYTES = 1_048_576  # 1 MB
@@ -768,8 +775,9 @@ RULES:
                 cl("SYS",
                     "/event start  — listen for Activator events (Ctrl+C to exit)\n"
                     "/event once   — wait for one event, then stop\n\n"
-                    f"Activator setup: trigger → Run Command →\n"
-                    f'  echo "event:<name>" > /tmp/aion.event')
+                    "Activator setup: trigger → Run Command →\n"
+                    '  echo "event:<name>" > /tmp/aion.state\n'
+                    "  notify_post com.aion.event   (optional, reduces latency)")
 
         elif cmd == "/clear":
             self.memory.set_system(self.system_prompt)
@@ -927,16 +935,20 @@ RULES:
         elif cmd.startswith("/model"):
             parts = cmd.split(None, 1)
             if len(parts) == 1:
-                # List available models
                 cl("SYS", "Available NVIDIA models:")
-                cl("SYS", "  deepseek-ai/deepseek-v4-flash  - Balanced (default)")
-                cl("SYS", "  deepseek-ai/deepseek-v4        - Full version")
-                cl("SYS", "  nvidia/llama-3.1-nemotron-70b  - Large")
+                cl("SYS", "  nvidia/nemotron-mini-4b-instruct  - Fastest (4B, low bandwidth)")
+                cl("SYS", "  deepseek-ai/deepseek-v4-flash     - Balanced (default)")
+                cl("SYS", "  deepseek-ai/deepseek-v4           - Full version")
+                cl("SYS", "  nvidia/llama-3.1-nemotron-70b    - Large")
                 cl("SYS", f"Current: {self.config['model']}")
             else:
-                # Change model
                 new_model = parts[1].strip()
-                valid_models = ["deepseek-ai/deepseek-v4-flash", "deepseek-ai/deepseek-v4", "nvidia/llama-3.1-nemotron-70b"]
+                valid_models = [
+                    "nvidia/nemotron-mini-4b-instruct",
+                    "deepseek-ai/deepseek-v4-flash",
+                    "deepseek-ai/deepseek-v4",
+                    "nvidia/llama-3.1-nemotron-70b",
+                ]
                 if new_model in valid_models:
                     self.config["model"] = new_model
                     self._save_config(self.config)
@@ -992,27 +1004,37 @@ RULES:
         latency = getattr(self.bridge, "_last_latency", 0)
         cl("SYS", f"  ↑{prompt} ↓{completion} | {latency:.1f}s | {self.config['model']}")
 
-    def _ensure_fifo(self, path):
+    @staticmethod
+    def _setup_notify():
+        """Set up notify_post-based IPC. Returns (notify_post, notify_check, token).
+        Falls back to (None, None, None) if ctypes/libc unavailable."""
         try:
-            if not os.path.exists(path):
-                os.mkfifo(path, 0o644)
-        except AttributeError:
-            cl("WARN", "mkfifo unavailable — event listener disabled")
-        except FileExistsError:
-            pass
+            import ctypes
+            libc = ctypes.CDLL("libc.dylib")
+            notifier = libc.notify_post
+            notifier.argtypes = [ctypes.c_char_p]
+            notifier.restype = ctypes.c_uint32
+            check_f = libc.notify_register_check
+            check_f.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int32)]
+            check_f.restype = ctypes.c_uint32
+            check = libc.notify_check
+            check.argtypes = [ctypes.c_int32, ctypes.POINTER(ctypes.c_int32)]
+            check.restype = ctypes.c_uint32
+            token = ctypes.c_int32()
+            status = check_f(b"com.aion.event", ctypes.byref(token))
+            if status == 0:
+                return notifier, check, token
         except Exception:
             pass
+        return None, None, None
 
-    def _read_event(self, path, timeout=30):
-        import select
+    def _read_event_file(self):
+        path = "/tmp/aion.state"
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-            r, _, _ = select.select([fd], [], [], timeout)
-            if r:
-                data = os.read(fd, 4096).decode("utf-8", errors="replace").strip()
-                os.close(fd)
-                return data
-            os.close(fd)
+            if os.path.exists(path):
+                data = open(path).read().strip()
+                if data:
+                    return data
         except Exception:
             pass
         return None
@@ -1047,18 +1069,23 @@ RULES:
         self.memory.cleanup()
 
     def _listen_events(self, path):
-        import select
+        import ctypes
+        notify_post, notify_check, notify_token = self._setup_notify()
+        state_file = "/tmp/aion.state"
+        cl("SYS", "Event listener ready (notify_post + /tmp/aion.state)")
+        cl("SYS", "Setup: Activator → Run Command →")
+        cl("SYS", '  echo "event:wifi_joined" > /tmp/aion.state && notify_post com.aion.event')
         try:
-            self._ensure_fifo(path)
-            cl("SYS", f"Listening on FIFO {path} — Activator sends events here")
+            check_val = ctypes.c_int32()
             while True:
-                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-                r, _, _ = select.select([fd], [], [], 1.0)
-                if r:
-                    data = os.read(fd, 4096).decode("utf-8", errors="replace").strip()
-                    if data:
-                        self._handle_event(data)
-                os.close(fd)
+                if notify_check is not None and notify_token is not None:
+                    check_val.value = 0
+                    notify_check(notify_token, ctypes.byref(check_val))
+                    if check_val.value:
+                        data = self._read_event_file()
+                        if data:
+                            self._handle_event(data)
+                time.sleep(0.5)
         except KeyboardInterrupt:
             cl("SYS", "Event listener stopped.")
         except Exception as e:
@@ -1142,9 +1169,18 @@ RULES:
 
 if __name__ == "__main__":
     import sys as _sys
-    if "--headless" in _sys.argv[1:]:
+    args = set(_sys.argv[1:])
+    if "--headless" in args or "--daemon" in args:
         app = AION()
-        cl("SYS", "Headless mode — listening for system events (Ctrl+C to stop)")
-        app._listen_events("/tmp/aion.event")
+        if "--daemon" in args:
+            try:
+                import subprocess as _sp
+                _sp.run(["jetsamctl", "-l", "512", "aion"], capture_output=True, timeout=5)
+                _sp.run(["jetsamctl", "-p", "16", "aion"], capture_output=True, timeout=5)
+            except Exception:
+                pass
+            cl("SYS", "Daemon mode — jetsam priority 16, limit 512MB")
+        cl("SYS", "Listening for system events (Ctrl+C to stop)")
+        app._listen_events("/tmp/aion.state")
     else:
         AION().run()

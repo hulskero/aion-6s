@@ -5,6 +5,16 @@ import urllib.request
 import urllib.error
 import socket
 import ssl
+from collections import deque
+
+# Singleton opener with keep-alive — saves TCP+TLS handshake per call
+_OPENER = urllib.request.build_opener()
+_OPENER.addheaders = [
+    ("Connection", "keep-alive"),
+    ("Accept", "application/json"),
+    ("Content-Type", "application/json"),
+]
+urllib.request.install_opener(_OPENER)
 
 
 class APIError(Exception):
@@ -19,10 +29,10 @@ class Bridge:
     ]
 
     DEFAULTS = {
-        "max_tokens": 512,
+        "max_tokens": 256,
         "request_timeout": 90,
         "rate_limit": 30,
-        "temperature": 0.7,
+        "temperature": 0.1,
     }
 
     def __init__(self, config):
@@ -36,7 +46,7 @@ class Bridge:
         self._retry_max = 3
         self._last_latency = 0
         self._last_usage = None
-        self._call_timestamps = []
+        self._call_timestamps = deque()
 
     def update_config(self, config):
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
@@ -49,15 +59,16 @@ class Bridge:
 
     def _enforce_rate_limit(self):
         now = time.time()
-        window = 60
-        cutoff = now - window
-        self._call_timestamps = [t for t in self._call_timestamps if t > cutoff]
-        if len(self._call_timestamps) >= self.rate_limit:
-            oldest = self._call_timestamps[0]
-            wait = window - (now - oldest)
+        cutoff = now - 60
+        d = self._call_timestamps
+        while d and d[0] <= cutoff:
+            d.popleft()
+        if len(d) >= self.rate_limit:
+            oldest = d[0]
+            wait = 60 - (now - oldest)
             if wait > 0:
                 time.sleep(wait)
-        self._call_timestamps.append(time.time())
+        d.append(now)
 
     def _post(self, messages, stream=False):
         if not self.api_key:
@@ -68,7 +79,6 @@ class Bridge:
             )
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
         }
         body = json.dumps({
             "model": self.model,

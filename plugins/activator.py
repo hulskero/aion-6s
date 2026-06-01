@@ -74,14 +74,13 @@ def run_activator(args=""):
         return f"Failed: {r['stderr'][:200] or 'activator not configured'}"
 
     if subcmd == "listen":
-        fifo = "/tmp/aion.event"
-        return (f"To connect Activator → AION:\n"
-                f"  1. Open Activator → pick a trigger (e.g. Power Connected)\n"
-                f"  2. Action → Run Command → enter:\n"
-                f"     echo \"event:system_event\" > {fifo}\n"
-                f"  3. In AION run: /event start\n"
-                f"  4. To test: @plugin activator send <event>\n\n"
-                f"FIFO path: {fifo}")
+        return ("To connect Activator → AION:\n"
+                "  1. Open Activator → pick a trigger (e.g. Power Connected)\n"
+                "  2. Action → Run Command → enter:\n"
+                '     echo "event:system_event" > /tmp/aion.state\n'
+                "  3. In AION run: /event start\n"
+                "  4. To test: @plugin activator send <event>\n\n"
+                "  notify_post com.aion.event  (optional, for zero-poll IPC)")
 
     return HELP_TEXT
 
