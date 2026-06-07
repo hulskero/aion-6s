@@ -1,0 +1,9 @@
+config.json
+__pycache__/
+*.pyc
+.DS_Store
+*.egg-info/
+dist/
+build/
+sessions/
+heal_cache.json
