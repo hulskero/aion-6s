@@ -1,4 +1,5 @@
-import shutil
+import re
+import shlex
 from core.jailbreak import safe_exec
 
 ACTIVATOR_EVENTS = [
@@ -68,7 +69,9 @@ def run_activator(args=""):
             return "Usage: @plugin activator send <event_name>"
         if not _check_tool():
             return "activator CLI not found — install from rpetri.ch/repo via Sileo"
-        r = safe_exec(f"activator send {arg}", timeout=5)
+        if not re.match(r'^[a-zA-Z0-9._-]+$', arg):
+            return f"Invalid event name: {arg}"
+        r = safe_exec(f"activator send {shlex.quote(arg)}", timeout=5)
         if r["success"]:
             return f"Sent: {arg}"
         return f"Failed: {r['stderr'][:200] or 'activator not configured'}"

@@ -16,7 +16,7 @@ import itertools
 import threading
 
 # Shrink thread stack from default 512KB → 128KB (saves ~75% per thread)
-threading.stack_size(128 * 1024)
+# threading.stack_size(128 * 1024)  # REMOVED — causes segfault on iOS
 
 try:
     import readline
@@ -300,7 +300,11 @@ class AION:
                 finally:
                     if fcntl:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            os.replace(tmp_path, self.config_path)
+            try:
+                os.replace(tmp_path, self.config_path)
+            except OSError:
+                import shutil
+                shutil.move(tmp_path, self.config_path)
         except Exception as e:
             cl("ERR", f"Config save error: {e}")
 
@@ -912,12 +916,20 @@ RULES:
   /help              This message""")
         elif cmd == "/reload":
             import sys
+            backup = {}
             for mod in list(sys.modules.keys()):
                 if mod.startswith("core.") or mod == "core" or mod.startswith("plugins.") or mod == "plugins":
+                    backup[mod] = sys.modules[mod]
                     del sys.modules[mod]
-            self._init_components()
-            self.system_prompt = self._build_prompt()
-            cl("SYS", f"Core + plugins reloaded. {len(self.plugins)} active.")
+            try:
+                self._init_components()
+                self.system_prompt = self._build_prompt()
+                cl("SYS", f"Core + plugins reloaded. {len(self.plugins)} active.")
+            except Exception as e:
+                sys.modules.update(backup)
+                self._init_components()
+                self.system_prompt = self._build_prompt()
+                cl("ERR", f"/reload failed ({e}) — restored previous modules")
 
         elif cmd.startswith("/update"):
             self._do_update(cmd.split(None, 1)[1] if len(cmd.split(None, 1)) > 1 else "")
@@ -1014,7 +1026,7 @@ RULES:
             for token in self.bridge.stream(self.memory.get_context()):
                 if not stop.is_set():
                     stop.set()
-                    t.join()
+                    t.join(timeout=2)
                     sys.stdout.write(f"\r\033[K{color}{label}>{ANSI['RST']} ")
                 sys.stdout.write(f"{color}{token}{ANSI['RST']}")
                 sys.stdout.flush()
@@ -1022,9 +1034,13 @@ RULES:
         except Exception as e:
             if not stop.is_set():
                 stop.set()
-                t.join()
+                t.join(timeout=2)
             cl("ERR", f"\n[API Error] {e}")
             return None
+        finally:
+            if not stop.is_set():
+                stop.set()
+                t.join(timeout=2)
         return text
 
     def _show_stats(self, prompt_chars, completion_chars):
@@ -1066,7 +1082,8 @@ RULES:
         path = "/tmp/aion.state"
         try:
             if os.path.exists(path):
-                data = open(path).read().strip()
+                with open(path) as f:
+                    data = f.read().strip()
                 if data:
                     return data
         except Exception:
@@ -1179,14 +1196,8 @@ RULES:
 
             response = self._stream(gray=False)
             if response is None:
-                for attempt in range(3):
-                    cl("WARN", f"  API error — retrying (attempt {attempt+2}/4)…")
-                    response = self._stream(gray=False)
-                    if response is not None:
-                        break
-                if response is None:
-                    cl("ERR", "  All retries failed — /retry or try again later")
-                    continue
+                cl("ERR", "  API error — check /status or /log")
+                continue
             final = response
 
             if self.mode != "plan":

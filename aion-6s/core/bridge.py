@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 import socket
 import http.client
+import threading
 from collections import deque
 
 
@@ -18,7 +19,7 @@ class Bridge:
     __slots__ = [
         "api_key", "base_url", "model", "max_tokens", "temperature",
         "request_timeout", "rate_limit", "_retry_max", "_last_latency",
-        "_last_usage", "_call_timestamps", "_network_ok", "_assertion_id",
+        "_last_usage", "_call_timestamps", "_network_ok", "_rlock",
     ]
 
     DEFAULTS = {
@@ -41,7 +42,7 @@ class Bridge:
         self._last_usage = None
         self._call_timestamps = deque()
         self._network_ok = False
-        self._assertion_id = None
+        self._rlock = threading.Lock()
 
     def update_config(self, config):
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
@@ -60,13 +61,14 @@ class Bridge:
         now = time.time()
         cutoff = now - 60
         d = self._call_timestamps
-        while d and d[0] <= cutoff:
-            d.popleft()
-        if len(d) >= self.rate_limit:
-            oldest = d[0]
-            wait = 60 - (now - oldest)
-            if wait > 0:
-                time.sleep(wait)
+        with self._rlock:
+            while d and d[0] <= cutoff:
+                d.popleft()
+            if len(d) >= self.rate_limit:
+                oldest = d[0]
+                wait = 60 - (now - oldest)
+                if wait > 0:
+                    time.sleep(wait)
 
     def _wait_for_network(self, max_retries=3):
         if self._network_ok:
@@ -95,7 +97,6 @@ class Bridge:
                 "  Set NVIDIA_API_KEY env var, or add \"api_key\" to config.json.\n"
                 "  Get one at https://build.nvidia.com/deepseek-ai/deepseek-v4-flash"
             )
-        self._keep_awake()
         self._wait_for_network()
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -153,7 +154,8 @@ class Bridge:
         for attempt in range(self._retry_max):
             try:
                 result = self._post(messages, stream)
-                self._call_timestamps.append(time.time())
+                with self._rlock:
+                    self._call_timestamps.append(time.time())
                 return result
             except APIError as e:
                 estr = str(e)
@@ -203,7 +205,7 @@ class Bridge:
                 raise APIError("API response missing content")
             return content
         finally:
-            self._allow_sleep()
+            response.close()
 
     def stream(self, messages):
         t0 = time.time()
@@ -231,53 +233,15 @@ class Bridge:
                                 pass
                     break
                 except (socket.timeout, urllib.error.URLError, ConnectionResetError,
-                        http.client.RemoteDisconnected) as e:
+                        http.client.RemoteDisconnected, ConnectionAbortedError,
+                        BrokenPipeError, OSError, http.client.IncompleteRead) as e:
                     response.close()
                     if retry == 1:
                         raise APIError(f"Stream interrupted after retry: {e}")
                     response = self._retry_post(messages, stream=True)
         finally:
-            self._allow_sleep()
+            response.close()
             self._last_latency = time.time() - t0
-
-    def _keep_awake(self):
-        if hasattr(self, "_assertion_id") and self._assertion_id is not None:
-            return
-        self._assertion_id = None
-        try:
-            import ctypes
-            iokit = ctypes.cdll.LoadLibrary(
-                "/System/Library/Frameworks/IOKit.framework/IOKit"
-            )
-            cf = ctypes.cdll.LoadLibrary(
-                "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
-            )
-            kIOPMAssertionType = cf.CFStringCreateWithCString(
-                None, b"PreventUserIdleSystemSleep", 0x08000100
-            )
-            name = cf.CFStringCreateWithCString(
-                None, b"AION-6S API Call", 0x08000100
-            )
-            assertion_id = ctypes.c_uint32(0)
-            iokit.IOPMAssertionCreateWithName(
-                kIOPMAssertionType, 255, name, ctypes.byref(assertion_id)
-            )
-            self._assertion_id = assertion_id.value
-        except Exception:
-            pass
-
-    def _allow_sleep(self):
-        if not hasattr(self, "_assertion_id") or self._assertion_id is None:
-            return
-        try:
-            import ctypes
-            iokit = ctypes.cdll.LoadLibrary(
-                "/System/Library/Frameworks/IOKit.framework/IOKit"
-            )
-            iokit.IOPMAssertionRelease(ctypes.c_uint32(self._assertion_id))
-        except Exception:
-            pass
-        self._assertion_id = None
 
     def get_usage(self):
         return self._last_usage

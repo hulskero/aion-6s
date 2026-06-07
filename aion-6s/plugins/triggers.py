@@ -2,6 +2,7 @@ import os
 import json
 import fnmatch
 from core.jailbreak import safe_exec
+from core.guardrails import check as guard_check
 
 CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -133,6 +134,9 @@ def run_triggers(args=""):
                 if action == "ignore":
                     return ""
                 if action == "cmd":
+                    blocked, _ = guard_check(value)
+                    if blocked:
+                        return f"handled|blocked|{blocked}"
                     r = safe_exec(value, timeout=30)
                     status = "OK" if r["success"] else r["stderr"][:100]
                     return f"handled|{action}|{value}|{status}"
@@ -153,9 +157,16 @@ def run_triggers(args=""):
 
 
 def _notify_post(name):
+    if not name:
+        return
     try:
         import ctypes
-        libc = ctypes.cdll.LoadLibrary("libc.dylib")
+        import ctypes.util
+        libc_path = ctypes.util.find_library("c")
+        if not libc_path:
+            return
+        libc = ctypes.cdll.LoadLibrary(libc_path)
+        libc.notify_post.argtypes = [ctypes.c_char_p]
         libc.notify_post(name.encode())
     except Exception:
         pass

@@ -29,7 +29,8 @@ def _gps_file():
     if not os.path.exists(GPS_FILE):
         return None
     try:
-        data = json.loads(open(GPS_FILE).read())
+        with open(GPS_FILE) as f:
+            data = json.load(f)
         lat = data.get("lat")
         lon = data.get("lon")
         acc = data.get("accuracy", "?")
@@ -43,6 +44,8 @@ def _gps_file():
 
 def _trigger_gps_shortcut():
     """Open Shortcuts to request GPS fix."""
+    if not shutil.which("open"):
+        return False
     try:
         subprocess.run(
             ["open", "shortcuts://run-shortcut?name=GPS2File&input=text&text=get"],

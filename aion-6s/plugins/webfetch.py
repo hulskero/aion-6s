@@ -1,5 +1,6 @@
-import subprocess
 import re
+import shlex
+from core.jailbreak import safe_exec
 
 
 def _strip_html(html):
@@ -18,13 +19,10 @@ def run_webfetch(args=""):
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
     try:
-        result = subprocess.run(
-            ["curl", "-sL", "-H", "User-Agent: AION-6S/1.0", url],
-            capture_output=True, text=True, timeout=15
-        )
-        if result.returncode != 0:
-            return f"Fetch failed: {result.stderr[:200]}"
-        text = result.stdout.strip()
+        result = safe_exec(f"curl -sL -H 'User-Agent: AION-6S/1.0' {shlex.quote(url)}", timeout=15)
+        if not result["success"]:
+            return f"Fetch failed: {result['stderr'][:200]}"
+        text = result["stdout"].strip()
         text = _strip_html(text)
         text = text[:3000]
         return text if text else "(empty page)"

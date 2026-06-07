@@ -1,11 +1,11 @@
-import subprocess
 import shutil
+from core.jailbreak import safe_exec
 
 
-def _run(argv, timeout=8):
+def _run(cmd, timeout=8):
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-        return r.stdout.strip().split("\n")[0][:120] or "no data"
+        r = safe_exec(cmd, timeout=timeout)
+        return r["stdout"].strip().split("\n")[0][:120] or "no data"
     except Exception as e:
         return str(e)
 
@@ -13,11 +13,11 @@ def _run(argv, timeout=8):
 def _vmstat_mem():
     """Parse vm_stat output into human-readable memory info."""
     try:
-        r = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=8)
-        if r.returncode != 0:
+        r = safe_exec("vm_stat", timeout=8)
+        if not r["success"]:
             return "mem n/a"
         pages = {}
-        for line in r.stdout.strip().split("\n"):
+        for line in r["stdout"].strip().split("\n"):
             if ":" in line:
                 key, val = line.split(":", 1)
                 val = val.strip().rstrip(".")
@@ -40,38 +40,38 @@ def sys_info(args=""):
     lines = ["[SYS] System Information:"]
 
     cmds = [
-        ("OS", ["uname", "-a"]),
-        ("Host", ["hostname"]),
-        ("Uptime", ["uptime"] if shutil.which("uptime") else None),
+        ("OS", "uname -a"),
+        ("Host", "hostname"),
+        ("Uptime", "uptime" if shutil.which("uptime") else None),
         ("Memory", None),
-        ("Disk", ["df", "-h", "/"]),
-        ("CPU cores", ["sysctl", "-n", "hw.ncpu"]),
-        ("Load", ["sysctl", "-n", "vm.loadavg"]),
+        ("Disk", "df -h /"),
+        ("CPU cores", "sysctl -n hw.ncpu"),
+        ("Load", "sysctl -n vm.loadavg"),
     ]
 
-    for label, argv in cmds:
-        if argv is None:
+    for label, cmd in cmds:
+        if cmd is None:
             if label == "Memory":
                 lines.append(f"  {label}: {_vmstat_mem()}")
             else:
                 lines.append(f"  {label}: not available")
             continue
-        lines.append(f"  {label}: {_run(argv)}")
+        lines.append(f"  {label}: {_run(cmd)}")
 
     return "\n".join(lines)
 
 
 def disk_usage(args=""):
     path = args.strip() or "/"
-    out = _run(["df", "-h", path])
+    out = _run(f"df -h {path}")
     lines = out.split("\n")
     return lines[-1] if len(lines) > 1 else out
 
 
 def wifi_status(args=""):
-    out = _run(["ifconfig", "en0"])
+    out = _run("ifconfig en0")
     if "no data" in out or "error" in out:
-        out = _run(["ifconfig", "lo0"])
+        out = _run("ifconfig lo0")
     return out[:300] if len(out) > 300 else out
 
 

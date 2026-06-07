@@ -1,5 +1,7 @@
 import json
-import subprocess
+import shlex
+import urllib.parse
+from core.jailbreak import safe_exec
 
 WMO_CODES = {
     0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
@@ -16,36 +18,34 @@ WMO_CODES = {
 }
 
 def _wttrin(location):
-    url = f"https://wttr.in/{location}?format=%l:+%C,+%t,+%w,+%h&m" if location else "https://wttr.in/?format=%l:+%C,+%t,+%w,+%h&m"
+    loc_enc = urllib.parse.quote(location, safe=",") if location else ""
+    url = f"https://wttr.in/{loc_enc}?format=%l:+%C,+%t,+%w,+%h&m" if location else "https://wttr.in/?format=%l:+%C,+%t,+%w,+%h&m"
     try:
-        r = subprocess.run(["curl", "-sL", "-H", "User-Agent: AION-6S/1.0", url], capture_output=True, text=True, timeout=8)
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
+        r = safe_exec(f"curl -sL -H 'User-Agent: AION-6S/1.0' {shlex.quote(url)}", timeout=8)
+        if r["success"] and r["stdout"].strip():
+            return r["stdout"].strip()
     except Exception:
         pass
     return None
 
 def _openmeteo(location):
     try:
-        r = subprocess.run(
-            ["curl", "-sL", "-H", "User-Agent: AION-6S/1.0", f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1"],
-            capture_output=True, text=True, timeout=8
-        )
-        if r.returncode != 0 or not r.stdout.strip():
+        loc_enc = urllib.parse.quote(location, safe="")
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={loc_enc}&count=1"
+        r = safe_exec(f"curl -sL -H 'User-Agent: AION-6S/1.0' {shlex.quote(geo_url)}", timeout=8)
+        if not r["success"] or not r["stdout"].strip():
             return None
-        geo = json.loads(r.stdout)
+        geo = json.loads(r["stdout"])
         if not geo.get("results"):
             return None
         lat = geo["results"][0]["latitude"]
         lon = geo["results"][0]["longitude"]
         loc_name = geo["results"][0]["name"]
-        r2 = subprocess.run(
-            ["curl", "-sL", "-H", "User-Agent: AION-6S/1.0", f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,weather_code,wind_speed_10m"],
-            capture_output=True, text=True, timeout=8
-        )
-        if r2.returncode != 0 or not r2.stdout.strip():
+        fc_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,weather_code,wind_speed_10m"
+        r2 = safe_exec(f"curl -sL -H 'User-Agent: AION-6S/1.0' {shlex.quote(fc_url)}", timeout=8)
+        if not r2["success"] or not r2["stdout"].strip():
             return None
-        data = json.loads(r2.stdout)
+        data = json.loads(r2["stdout"])
         w = data["current"]
         code = WMO_CODES.get(w["weather_code"], f"Code {w['weather_code']}")
         return f"{loc_name}: {w['temperature_2m']}°C, {code}, wind {w['wind_speed_10m']} km/h"
