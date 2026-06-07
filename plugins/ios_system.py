@@ -183,7 +183,7 @@ def _battery():
     if "Temperature" in data:
         try:
             temp_k = float(data["Temperature"])
-            temp_c = round(temp_k / 100 - 273.15, 1) if temp_k > 100 else round(temp_k, 1)
+            temp_c = round(temp_k / 10 - 273.15, 1) if temp_k > 100 else round(temp_k, 1)
             lines.append(f"  Temp: {temp_c}C")
         except ValueError:
             pass
@@ -212,7 +212,7 @@ def _battery_health():
     if "Temperature" in data:
         try:
             temp_k = float(data["Temperature"])
-            temp_c = round(temp_k / 100 - 273.15, 1) if temp_k > 100 else round(temp_k, 1)
+            temp_c = round(temp_k / 10 - 273.15, 1) if temp_k > 100 else round(temp_k, 1)
             lines.append(f"  Temp: {temp_c}C")
         except ValueError:
             pass

@@ -143,11 +143,11 @@ def _tts_cli(text):
 
 
 def _ioreg_val(text, key):
-    m = re.search(rf'"{key}"\s*=\s*(\S+)', text)
-    if m:
-        return m.group(1).rstrip(",")
     m = re.search(rf'"{key}"\s*=\s*"([^"]*)"', text)
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+    m = re.search(rf'"{key}"\s*=\s*(\S+)', text)
+    return m.group(1).rstrip(",") if m else None
 
 
 def _battery_info():
@@ -183,7 +183,7 @@ def _battery():
     if "Temperature" in data:
         try:
             temp_k = float(data["Temperature"])
-            temp_c = round(temp_k / 100 - 273.15, 1) if temp_k > 100 else round(temp_k, 1)
+            temp_c = round(temp_k / 10 - 273.15, 1) if temp_k > 100 else round(temp_k, 1)
             lines.append(f"  Temp: {temp_c}C")
         except ValueError:
             pass
@@ -212,7 +212,7 @@ def _battery_health():
     if "Temperature" in data:
         try:
             temp_k = float(data["Temperature"])
-            temp_c = round(temp_k / 100 - 273.15, 1) if temp_k > 100 else round(temp_k, 1)
+            temp_c = round(temp_k / 10 - 273.15, 1) if temp_k > 100 else round(temp_k, 1)
             lines.append(f"  Temp: {temp_c}C")
         except ValueError:
             pass
@@ -276,7 +276,7 @@ def _wifi():
         for key, label in [("SSID", "SSID"), ("BSSID", "BSSID"),
                             ("RSSI", "RSSI"), ("channel", "CH"),
                             ("noise", "Noise"), ("txRate", "TX")]:
-            v = ext.get(key)
+            v = ext.get(key.lower())
             if v:
                 lines.append(f"  {label}: {v}")
     else:
@@ -316,8 +316,10 @@ def _wifi_ext():
             return None
         out = r["stdout"]
         data = {}
+        ios_keys = {"SSID": "IO80211SSID", "BSSID": "IO80211BSSID"}
         for key in ("SSID", "BSSID", "RSSI", "channel", "noise", "txRate"):
-            v = _ioreg_val(out, key)
+            lookup = ios_keys.get(key, key)
+            v = _ioreg_val(out, lookup) or _ioreg_val(out, key)
             if v is not None:
                 data[key.lower()] = v
         return data if data else None
