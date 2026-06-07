@@ -26,13 +26,19 @@ def _load_objc():
         sel_reg.restype = ctypes.c_void_p
         sel_reg.argtypes = [ctypes.c_char_p]
 
-        m0 = lib.objc_msgSend
-        m0.restype = ctypes.c_void_p
-        m0.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        CFN = ctypes.CFUNCTYPE
 
-        m1 = lib.objc_msgSend
-        m1.restype = ctypes.c_void_p
-        m1.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        m0 = CFN(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(
+            ("objc_msgSend", lib)
+        )
+
+        m1 = CFN(
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+        )(("objc_msgSend", lib))
+
+        mb = CFN(
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool
+        )(("objc_msgSend", lib))
 
         libc = ctypes.cdll.LoadLibrary("libc.dylib")
 
@@ -41,6 +47,7 @@ def _load_objc():
             "sel_reg": sel_reg,
             "m0": m0,
             "m1": m1,
+            "mb": mb,
             "libc": libc,
         }
         return _OBJC
@@ -103,8 +110,13 @@ def _avail():
 def _tts(text):
     if not _ensure_tts():
         return _tts_cli(text) if shutil.which("say") else "TTS unavailable (no AVFAudio or say)"
+    objc = None
+    pool = None
+    synth = None
     try:
         objc = _load_objc()
+        pool = objc["m0"](_cls("NSAutoreleasePool"), _sel("new"))
+
         av = _cls("AVSpeechSynthesizer")
         utt_cls = _cls("AVSpeechUtterance")
         voice_cls = _cls("AVSpeechSynthesisVoice")
@@ -135,6 +147,11 @@ def _tts(text):
         return f"TTS: spoken \"{text[:100]}\""
     except Exception as e:
         return _tts_cli(text) if shutil.which("say") else f"TTS failed: {e}"
+    finally:
+        if synth and objc:
+            objc["m0"](synth, _sel("release"))
+        if pool and objc:
+            objc["m0"](pool, _sel("drain"))
 
 
 def _tts_cli(text):
@@ -325,6 +342,21 @@ def _wifi_ext():
         return data if data else None
     except Exception:
         return None
+
+
+def keep_awake(enabled=True):
+    """Set iOS idleTimerDisabled — prevents sleep during streaming."""
+    ui_app = _cls("UIApplication")
+    if not ui_app:
+        return False
+    objc = _load_objc()
+    if not objc:
+        return False
+    app = objc["m0"](ui_app, _sel("sharedApplication"))
+    if not app:
+        return False
+    objc["mb"](app, _sel("setIdleTimerDisabled:"), enabled)
+    return True
 
 
 def _objc_test():

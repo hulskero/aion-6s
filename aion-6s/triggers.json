@@ -1,0 +1,29 @@
+{
+  "wifi_joined": {
+    "action": "notify",
+    "value": "WiFi connected"
+  },
+  "wifi_left": {
+    "action": "notify",
+    "value": "WiFi disconnected"
+  },
+  "power_connected": {
+    "action": "notify",
+    "value": "Now charging"
+  },
+  "power_disconnected": {
+    "action": "notify",
+    "value": "On battery"
+  },
+  "lock": {
+    "action": "ignore"
+  },
+  "unlock": {
+    "action": "notify",
+    "value": "Device unlocked"
+  },
+  "low_battery": {
+    "action": "ai",
+    "value": "low_battery"
+  }
+}

@@ -141,7 +141,7 @@ test("returns dict (not None)", result is not None)
 test("returns dict (not False)", result is not False)
 
 if isinstance(result, dict):
-    expected_keys = {"get_class", "sel_reg", "m0", "m1", "libc"}
+    expected_keys = {"get_class", "sel_reg", "m0", "m1", "mb", "libc"}
     actual_keys = set(result.keys())
     test("has all required keys", actual_keys == expected_keys,
          f"missing: {expected_keys - actual_keys}, extra: {actual_keys - expected_keys}")

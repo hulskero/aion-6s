@@ -1,7 +1,6 @@
 import subprocess
 import json
 import os
-import re
 import shutil
 
 GPS_FILE = os.path.expanduser("~/Documents/gps.json")

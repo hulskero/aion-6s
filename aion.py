@@ -327,6 +327,11 @@ class AION:
         self.memory = MemoryManager(self.config.get("max_context_pairs", 5))
         self.healer = SelfHeal(self.bridge, self.config.get("max_heal_attempts", 3))
         self.plugins = load_plugins(os.path.join(os.path.dirname(__file__), "plugins"))
+        try:
+            from plugins.ios_system import keep_awake
+            keep_awake(True)
+        except Exception:
+            pass
         self.system_prompt = self._build_prompt()
         self.memory.set_system(self.system_prompt)
 

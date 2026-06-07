@@ -1,6 +1,5 @@
 import shutil
 import shlex
-import os
 from core.jailbreak import safe_exec
 
 TOOLS_CHECK = [

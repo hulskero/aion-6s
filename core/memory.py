@@ -2,10 +2,11 @@ import gc
 
 
 class MemoryManager:
-    __slots__ = ["max_pairs", "context", "_msg_count"]
+    __slots__ = ["max_pairs", "max_tool_msgs", "context", "_msg_count"]
 
-    def __init__(self, max_pairs=5):
+    def __init__(self, max_pairs=5, max_tool_msgs=30):
         self.max_pairs = max_pairs
+        self.max_tool_msgs = max_tool_msgs
         self.context = []
         self._msg_count = 0
 
@@ -30,7 +31,22 @@ class MemoryManager:
                     continue
                 keep.append(msg)
             self.context = keep
+        self._trim_tool_msgs()
         self._smart_gc()
+
+    def _trim_tool_msgs(self):
+        tool_indices = [i for i, m in enumerate(self.context)
+                        if m.get("role") == "tool"]
+        if len(tool_indices) > self.max_tool_msgs:
+            excess = len(tool_indices) - self.max_tool_msgs
+            keep = []
+            trim_count = 0
+            for i, m in enumerate(self.context):
+                if trim_count < excess and m.get("role") == "tool":
+                    trim_count += 1
+                    continue
+                keep.append(m)
+            self.context = keep
 
     def get_context(self):
         return self.context
