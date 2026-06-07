@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 import shlex
-import subprocess
 from typing import Optional, Tuple
 
 

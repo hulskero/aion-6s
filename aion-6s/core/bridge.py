@@ -2,14 +2,16 @@ import json
 import os
 import time
 import random
-import ssl
-import urllib.parse
-import urllib.request
-import urllib.error
+
 import socket
 import http.client
 import threading
 from collections import deque
+
+import ssl
+_SSL_CONTEXT = ssl.create_default_context()
+_SSL_CONTEXT.check_hostname = False
+_SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
 
 class APIError(Exception):
@@ -25,12 +27,13 @@ class Bridge:
 
     DEFAULTS = {
         "max_tokens": 256,
-        "request_timeout": 200,
+        "request_timeout": 45,
         "rate_limit": 30,
         "temperature": 0.1,
     }
 
     def __init__(self, config):
+        config = config if config is not None else {}
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
         self.base_url = config.get("base_url", "https://integrate.api.nvidia.com/v1")
         self.model = config.get("model", "deepseek-ai/deepseek-v4-flash")
@@ -72,10 +75,16 @@ class Bridge:
                     time.sleep(wait)
 
     def _wait_for_network(self, max_retries=3):
-        if self._network_ok:
-            return
+        import urllib.parse
         host = urllib.parse.urlparse(self.base_url).hostname
         port = urllib.parse.urlparse(self.base_url).port or 443
+        try:
+            sock = socket.create_connection((host, port), timeout=3)
+            sock.close()
+            self._network_ok = True
+            return
+        except (socket.timeout, OSError):
+            pass
         for attempt in range(max_retries):
             try:
                 sock = socket.create_connection((host, port), timeout=10)
@@ -89,17 +98,18 @@ class Bridge:
                 time.sleep(5 + random.uniform(0, 3))
 
     def _build_opener(self):
+        import urllib.request
         try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
             return urllib.request.build_opener(
-                urllib.request.HTTPSHandler(context=ctx)
+                urllib.request.HTTPSHandler(context=_SSL_CONTEXT)
             )
         except Exception:
+            import warnings
+            warnings.warn("SSL context creation failed - using default opener")
             return urllib.request.build_opener()
 
     def _post(self, messages, stream=False):
+        import urllib.request, urllib.error
         if not self.api_key:
             raise APIError(
                 "No API key.\n"
@@ -109,7 +119,6 @@ class Bridge:
         self._wait_for_network()
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Connection": "close",
             "User-Agent": "AION-6S/1.0",
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -145,6 +154,7 @@ class Bridge:
                 hint = ""
             raise APIError(f"HTTP {code}: {detail}{hint}")
         except urllib.error.URLError as e:
+            self._network_ok = False
             reason = str(e.reason)
             if "timed out" in reason.lower():
                 hint = " — Connection timed out (check network / VPN)"
@@ -173,22 +183,22 @@ class Bridge:
                 if "504" in estr:
                     if attempt == self._retry_max - 1:
                         raise
-                    wait = (attempt + 1) * 5 + random.uniform(0, 3)
+                    wait = min(2 * (2 ** attempt), 30) + random.uniform(0, 2)
                     time.sleep(wait)
                     continue
                 if "429" in estr and attempt < self._retry_max - 1:
-                    wait = (attempt + 1) * 10 + random.uniform(0, 5)
+                    wait = min(2 * (2 ** attempt), 30) + random.uniform(0, 5)
                     time.sleep(wait)
                     continue
                 if "timed out" in estr.lower() or "unreachable" in estr.lower():
                     if attempt == self._retry_max - 1:
                         raise
-                    wait = (attempt + 1) * 15 + random.uniform(0, 10)
+                    wait = min(2 * (2 ** attempt), 30) + random.uniform(0, 2)
                     time.sleep(wait)
                     continue
                 if attempt == self._retry_max - 1:
                     raise
-                wait = (attempt + 1) * 5 + random.uniform(0, 3)
+                wait = min(2 * (2 ** attempt), 30) + random.uniform(0, 2)
                 time.sleep(wait)
                 continue
 
@@ -217,11 +227,12 @@ class Bridge:
             response.close()
 
     def stream(self, messages):
+        import urllib.error
         t0 = time.time()
         response = self._retry_post(messages, stream=True)
         self._last_usage = None
         try:
-            for retry in range(2):
+            for retry in range(3):
                 try:
                     for line_bytes in response:
                         line = line_bytes.decode("utf-8").strip()
@@ -245,8 +256,11 @@ class Bridge:
                         http.client.RemoteDisconnected, ConnectionAbortedError,
                         BrokenPipeError, OSError, http.client.IncompleteRead) as e:
                     response.close()
-                    if retry == 1:
-                        raise APIError(f"Stream interrupted after retry: {e}")
+                    self._network_ok = False
+                    if retry == 2:
+                        raise APIError(f"Stream interrupted after retries: {e}")
+                    wait = (retry + 1) * 2 + random.uniform(0, 1)
+                    time.sleep(wait)
                     response = self._retry_post(messages, stream=True)
         finally:
             response.close()

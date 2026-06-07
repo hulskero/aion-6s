@@ -1,77 +1,64 @@
-import re
 import shutil
 from core.jailbreak import safe_exec
-
-
-def _ioreg_display():
-    """Read display info via ioreg (requires IOKitTools)."""
-    if not shutil.which("ioreg"):
-        return None
-    data = {}
-    paths = [
-        ["-rc", "AppleBacklightDisplay"],
-        ["-p", "IODeviceTree", "-r", "-n", "display"],
-        ["-rc", "AppleCLCD"],
-    ]
-    for args in paths:
-        try:
-            r = safe_exec("ioreg " + " ".join(args), timeout=8)
-            if not r["success"] or not r["stdout"].strip():
-                continue
-            out = r["stdout"]
-            def _get(k):
-                m = re.search(rf'"{k}"\s*=\s*(\S+)', out)
-                return m.group(1).rstrip(",") if m else None
-            for key in ("brightness", "IOMirror", "IOFramebuffer", "display-type", "resolution"):
-                v = _get(key)
-                if v is not None:
-                    data[key.lower().replace("-", "_")] = v
-            m = re.search(r'(\d+)x(\d+)', out)
-            if m:
-                data["resolution"] = f"{m.group(1)}x{m.group(2)}"
-        except Exception:
-            pass
-    if not data:
-        return None
-    return data
-
-
-def _sysctl_display():
-    """Fallback: basic display info via sysctl."""
-    try:
-        r = safe_exec("sysctl -n hw.memsize", timeout=5)
-        data = {}
-        for key in ("hw.pagesize", "kern.bootargs"):
-            r2 = safe_exec(f"sysctl -n {key}", timeout=5)
-            if r2["success"] and r2["stdout"].strip():
-                data[key.split(".")[-1]] = r2["stdout"].strip()[:60]
-        return data if data else None
-    except Exception:
-        return None
+from core.ios_hw import ioreg_get_first, ioreg_get_properties, get_display_specs
 
 
 def run_display(args=""):
-    data = _ioreg_display()
-    lines = []
-    if data:
-        lines.append("Display:")
-        if "brightness" in data:
-            lines.append(f"  Brightness: {data['brightness']}")
-        if "resolution" in data:
-            lines.append(f"  Resolution: {data['resolution']}")
-        for k, v in data.items():
-            if k not in ("brightness", "resolution"):
-                lines.append(f"  {k}: {v}")
-    else:
-        fallback = _sysctl_display()
-        if shutil.which("ioreg"):
-            lines.append("Display info unavailable (ioreg found no display service)")
+    props = ioreg_get_first("AppleCLCD")
+    if not props:
+        props = ioreg_get_first("AppleMobileADBE0")
+
+    lines = ["Display:"]
+
+    if props:
+        res = None
+        for k in ('IODisplayEDID', 'EDID', 'IOModuleIdentifier'):
+            v = props.get(k)
+            if v and isinstance(v, (bytes, bytearray)):
+                edid = v if isinstance(v, bytes) else bytes(v)
+                if len(edid) >= 72:
+                    w = edid[56] | ((edid[58] & 0xF0) << 4)
+                    h = edid[59] | ((edid[61] & 0xF0) << 4)
+                    if w and h:
+                        res = f"{w}x{h}"
+                        break
+
+        if not res:
+            fb = props.get('IOFramebuffer')
+            if fb and isinstance(fb, dict):
+                w, h = fb.get('w'), fb.get('h')
+                if w and h:
+                    res = f"{w}x{h}"
+
+        if not res:
+            rows = props.get('displayPixelRows')
+            cols = props.get('displayPixelColumns')
+            if rows is not None and cols is not None:
+                res = f"{cols}x{rows}"
+
+        if res:
+            lines.append(f"  Resolution: {res}")
+
+        brightness = props.get('brightness')
+        if brightness is None:
+            pm = props.get('IOPowerManagement')
+            if isinstance(pm, dict):
+                brightness = pm.get('CurrentPowerState')
+        if brightness is not None:
+            lines.append(f"  Brightness: {brightness}")
+
+    if not props:
+        specs = get_display_specs()
+        if specs:
+            lines.append(f"  Resolution: {specs['w']}x{specs['h']} (hardcoded, {specs.get('name', '?')})")
+            lines.append(f"  PPI: {specs['ppi']}  Scale: {specs.get('scale', 1)}x")
         else:
-            lines.append("Display info unavailable — install IOKitTools via Sileo")
-        if fallback:
-            lines.append("sysctl:")
-            for k, v in fallback.items():
-                lines.append(f"  {k}: {v}")
+            r = safe_exec("ioreg -rc AppleCLCD -w 0", timeout=5)
+            if r["success"] and r["stdout"].strip():
+                lines.append("  (data available via ioreg install)")
+            else:
+                lines.append("  Resolution: unknown device")
+
     return "\n".join(lines)
 
 

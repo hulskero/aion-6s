@@ -1,10 +1,10 @@
 import re
-import shutil
+
+from core.ios_hw import ioreg_get_first
 from core.jailbreak import safe_exec
 
 
 def _ifconfig_en0():
-    """Basic WiFi info from ifconfig (always works, no extra packages)."""
     try:
         r = safe_exec("ifconfig en0", timeout=8)
         if not r["success"]:
@@ -23,28 +23,47 @@ def _ifconfig_en0():
 
 
 def _ioreg_wifi():
-    """Extended WiFi info via ioreg (requires IOKitTools package)."""
-    if not shutil.which("ioreg"):
-        return None
+    for cls in ("AppleBCMWLANCore", "IO80211Interface"):
+        props = ioreg_get_first(cls)
+        if props:
+            break
+    else:
+        props = None
+
+    if props:
+        data = {}
+        for src, dst in [
+            ("SSID_STR", "ssid"), ("SSID", "ssid"),
+            ("BSSID", "bssid"), ("RSSI", "rssi"),
+            ("CHANNEL", "channel"), ("NOISE", "noise"),
+            ("txRate", "txrate"), ("maxLinkSpeed", "maxspeed"),
+        ]:
+            if src in props and props[src] is not None:
+                data[dst] = str(props[src])
+        return data if data else None
+
     try:
-        r = safe_exec("ioreg -rc IO80211Interface", timeout=8)
-        if not r["success"] or not r["stdout"].strip():
+        for cls in ("AppleBCMWLANCore", "IO80211Interface"):
+            r = safe_exec(f"ioreg -rc {cls}", timeout=8)
+            if r["success"] and r["stdout"].strip():
+                break
+        else:
             return None
         out = r["stdout"]
         data = {}
+
         def get(k):
             m = re.search(rf'"{k}"\s*=\s*(\S+)', out)
             if m:
                 return m.group(1).rstrip(",")
             m = re.search(rf'"{k}"\s*=\s*"([^"]*)"', out)
             return m.group(1) if m else None
+
         for key in ("SSID", "BSSID", "RSSI", "channel", "noise", "txRate"):
             v = get(key)
             if v is not None:
                 data[key.lower()] = v
-        if not data:
-            return None
-        return data
+        return data if data else None
     except Exception:
         return None
 
@@ -53,8 +72,10 @@ def run_wifi(args=""):
     basic = _ifconfig_en0()
     if not basic:
         return "WiFi: en0 not available"
+
     ext = _ioreg_wifi()
     lines = []
+
     if ext:
         parts = []
         if "ssid" in ext:
@@ -69,9 +90,12 @@ def run_wifi(args=""):
             parts.append(f"Noise: {ext['noise']} dBm")
         if "txrate" in ext:
             parts.append(f"TX: {ext['txrate']} Mbps")
+        if "maxspeed" in ext:
+            parts.append(f"Max: {ext['maxspeed']} Mbps")
         lines.append("  ".join(parts))
     else:
         lines.append("Extended info unavailable (install IOKitTools via Sileo)")
+
     ip = basic.get("ip", "?")
     mac = basic.get("mac", "?")
     status = basic.get("status", "?")

@@ -1,6 +1,10 @@
+import logging
 import re
 import shutil
 from core.jailbreak import safe_exec
+from core.ios_hw import ioreg_get_first
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _ifconfig_cell():
@@ -20,15 +24,63 @@ def _ifconfig_cell():
         return {}
 
 
-def _ioreg_cellular():
-    """Extended cellular info via ioreg (requires IOKitTools)."""
+def _plist_carrier():
+    try:
+        import plistlib
+        path = '/var/mobile/Library/Preferences/com.apple.CommCenter.plist'
+        with open(path, 'rb') as f:
+            d = plistlib.load(f)
+        carrier = d.get('CarrierName') or d.get('carrier') or d.get('currentCarrier')
+        if carrier:
+            return str(carrier)
+    except Exception:
+        LOGGER.debug("commcenter plist read failed")
+    try:
+        import plistlib, glob
+        bundles = glob.glob('/System/Library/Carrier Bundles/*/carrier.plist')
+        for path in bundles[:3]:
+            with open(path, 'rb') as f:
+                d = plistlib.load(f)
+            name = d.get('CarrierName')
+            if name:
+                return str(name)
+    except Exception:
+        LOGGER.debug("carrier bundles read failed")
+    return None
+
+
+def _ioreg_cellular_ctypes():
+    data = {}
+    for name in ("AppleBaseband", "AppleBasebandPCI"):
+        props = ioreg_get_first(name)
+        if props:
+            mapping = {
+                "CarrierName": "carrier",
+                "Manufacturer": "manufacturer",
+                "FirmwareVersion": "firmware",
+                "IMEI": "imei",
+            }
+            for iokey, datakey in mapping.items():
+                v = props.get(iokey)
+                if v is not None:
+                    data[datakey] = str(v)
+            for sigkey in ("RSSI", "SignalStrength"):
+                v = props.get(sigkey)
+                if v is not None:
+                    data["signal"] = str(v)
+                    break
+            if data:
+                break
+    return data if data else None
+
+
+def _ioreg_cellular_shell():
     if not shutil.which("ioreg"):
         return None
     data = {}
     targets = [
         (["-rc", "AppleBaseband"], ["CarrierName", "Manufacturer", "FirmwareVersion", "imei"]),
-        (["-rc", "CTBaseband"], ["CarrierName", "Manufacturer", "FirmwareVersion", "imei"]),
-        (["-rc", "AppleARMPMUPowerStats"], []),
+        (["-rc", "AppleBasebandPCI"], ["CarrierName", "Manufacturer", "FirmwareVersion", "imei"]),
     ]
     for args, keys in targets:
         try:
@@ -46,33 +98,39 @@ def _ioreg_cellular():
                 v = _get(k)
                 if v is not None:
                     data[k.lower()] = v
-            m = re.search(r'signal|rssi', out, re.I)
-            if m:
-                sig = _get("rssi") or _get("RSSI") or _get("signal")
-                if sig:
-                    data["signal"] = sig
+            sig = _get("RSSI") or _get("SignalStrength")
+            if sig:
+                data["signal"] = sig
         except Exception:
-            pass
-    if not data:
-        return None
-    return data
+            LOGGER.debug("ioreg cellular shell failed")
+    return data if data else None
 
 
 def run_cellular(args=""):
     basic = _ifconfig_cell()
-    ext = _ioreg_cellular()
+    ext = _ioreg_cellular_ctypes()
+    if not ext:
+        ext = _ioreg_cellular_shell()
     lines = ["Cellular:"]
     if ext:
-        if "carriername" in ext:
-            lines.append(f"  Carrier: {ext['carriername']}")
-        if "signal" in ext:
-            lines.append(f"  Signal: {ext['signal']} dBm")
-        if "firmwareversion" in ext:
-            lines.append(f"  Baseband FW: {ext['firmwareversion']}")
+        carrier = ext.get("carrier") or ext.get("carriername")
+        if not carrier:
+            carrier = _plist_carrier()
+        if carrier:
+            lines.append(f"  Carrier: {carrier}")
+        sig = ext.get("signal")
+        if sig:
+            lines.append(f"  Signal: {sig} dBm")
+        fw = ext.get("firmware") or ext.get("firmwareversion")
+        if fw:
+            lines.append(f"  Baseband FW: {fw}")
         for k, v in ext.items():
-            if k not in ("carriername", "signal", "firmwareversion"):
+            if k not in ("carrier", "carriername", "signal", "firmware", "firmwareversion"):
                 lines.append(f"  {k}: {v}")
     else:
+        carrier = _plist_carrier()
+        if carrier:
+            lines.append(f"  Carrier: {carrier}")
         if shutil.which("ioreg"):
             lines.append("  Cellular info not found via ioreg")
         else:

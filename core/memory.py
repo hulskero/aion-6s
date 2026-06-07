@@ -92,6 +92,9 @@ class MemoryManager:
                 self.context = keep
             self._msg_count = len(self.context)
             self._total_bytes = sum(len(m.get("content", "")) for m in self.context)
+            if self._total_bytes > self.max_total_bytes:
+                self._trim_to_byte_target()
+            self._trim_tool_msgs()
             self._smart_gc()
 
     def count_chars(self):

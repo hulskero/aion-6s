@@ -33,16 +33,23 @@ BLOCKED = [
     (r'\buserdel\s+', "delete user accounts"),
 
     # System shutdown/reboot
-    (r'\bshutdown\s+', "shutdown command"),
-    (r'\breboot\s+', "reboot command"),
-    (r'\bpoweroff\s+', "poweroff command"),
-    (r'\bhalt\s+', "halt command"),
+    (r'\bshutdown(\s+|$|[;&|])', "shutdown command"),
+    (r'\breboot(\s+|$|[;&|])', "reboot command"),
+    (r'\bpoweroff(\s+|$|[;&|])', "poweroff command"),
+    (r'\bhalt(\s+|$|[;&|])', "halt command"),
     (r'\binit\s+[06]', "init 0/6 (shutdown)"),
     (r'\bsystemctl\s+(poweroff|reboot|halt)', "systemctl power operations"),
 
     # Fork bomb and similar
     (r':\(\)\s*\{', "fork bomb"),
     (r'\[.*\]\s*-\s*\[.*\]\s*&\s*while\s+true', "another fork bomb variant"),
+
+    # Python3 code-execution bypasses (python3 is in SAFE_COMMANDS but -c/-m/heredoc allow arbitrary execution)
+    (r'\bpython3\s+-c\b', "python3 -c inline code execution"),
+    (r'\bpython3\s+-m\b', "python3 -m module execution"),
+    (r'\bpython3\s+--eval\b', "python3 --eval inline execution"),
+    (r'\bpython3\s+-W\b', "python3 -W (can chain with -c)"),
+    (r'\bpython3\s*<<', "python3 heredoc execution"),
 
     # Remote code execution patterns
     (r'(curl|wget|fetch)\s+.*\|\s*(?:sh|bash|zsh|python|python3|perl|ruby|ash|dash)', "pipe download to shell"),
@@ -88,6 +95,26 @@ BLOCKED = [
     (r'iptables\s+.*\-P\s+.*(DROP|ACCEPT)', "iptables policy change"),
     (r'ifconfig\s+.*down', "network interface down"),
     (r'ip\s+link\s+set\s+.*down', "ip link set down"),
+
+    # Network scanning and remote access (critical on jailbroken device)
+    (r'\bnc\b', "netcat (potential reverse shell)"),
+    (r'\bncat\b', "ncat (reverse shell)"),
+    (r'\bssh\b', "SSH connection"),
+    (r'\bscp\b', "SCP file transfer"),
+    (r'\btelnet\b', "Telnet connection"),
+    (r'\bnmap\b', "Network scanning"),
+
+    # Kernel and system manipulation on jailbroken device
+    (r'\bsysctl\s+-w\b', "sysctl kernel parameter write"),
+    (r'\becho\s+.*>\s*/dev/', "write to device memory"),
+
+    # Process killing
+    (r'\bkillall\b', "kill all processes"),
+
+    # Additional dangerous operations
+    (r'\blaunchctl\s+unload\b', "service removal"),
+    (r'\bdmesg\s+-c\b', "clear kernel ring buffer"),
+    (r'\bdd\s+if=/dev/urandom', "overwrite with random data"),
 ]
 
 DESTRUCTIVE = [
@@ -108,10 +135,10 @@ DESTRUCTIVE = [
     r'\bpasswd\s+',
     r'\bsudo\s+',
     r'\bchroot\s+',
-    r'\bshutdown\s+',
-    r'\breboot\s+',
-    r'\bpoweroff\s+',
-    r'\bhalt\s+',
+    r'\bshutdown(\s+|$|[;&|])',
+    r'\breboot(\s+|$|[;&|])',
+    r'\bpoweroff(\s+|$|[;&|])',
+    r'\bhalt(\s+|$|[;&|])',
     r'\binit\s+',
     r'\bmkfs\s+',
     r'\bfdisk\s+',
@@ -123,6 +150,17 @@ DESTRUCTIVE = [
     r'\blvm\s+',
     r'\bvg\s+',
     r'\blv\s+',
+    r'\bnc\b',
+    r'\bncat\b',
+    r'\bssh\b',
+    r'\bscp\b',
+    r'\btelnet\b',
+    r'\bnmap\b',
+    r'\bsysctl\b',
+    r'\bkilla',
+    r'\bkillall\b',
+    r'\blaunchctl\b',
+    r'\bdmesg\b',
 ]
 
 _proactive_yes = False
@@ -130,6 +168,7 @@ _proactive_yes = False
 # Pre-compiled regex patterns (avoids re-compilation on every check())
 _BLOCKED_RE = [(re.compile(p, re.IGNORECASE), r) for p, r in BLOCKED]
 _DESTRUCTIVE_RE = [re.compile(p, re.IGNORECASE) for p in DESTRUCTIVE]
+_AI_CMD_RE = re.compile(r'@cmd\s+(.+)')
 
 
 def check(cmd):
@@ -147,7 +186,7 @@ def check(cmd):
 def check_ai_response(text):
     """Pre-check AI response for dangerous commands before execution"""
     dangerous_keywords = ["rm -rf", "dd if=", ":(){", "mkfs.", "reboot", "poweroff", "halt"]
-    for match in re.finditer(r'@cmd\s+(.+)', text):
+    for match in _AI_CMD_RE.finditer(text):
         cmd = match.group(1).strip()
         for kw in dangerous_keywords:
             if kw in cmd.lower():

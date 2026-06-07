@@ -1,6 +1,5 @@
 import re
 import shlex
-from core.jailbreak import safe_exec
 
 ACTIVATOR_EVENTS = [
     "libactivator.system.wifi.joined",
@@ -48,6 +47,7 @@ Available events for Activator:
 
 
 def _check_tool():
+    from core.jailbreak import safe_exec
     r = safe_exec("which activator", timeout=5)
     return r["success"]
 
@@ -71,6 +71,7 @@ def run_activator(args=""):
             return "activator CLI not found — install from rpetri.ch/repo via Sileo"
         if not re.match(r'^[a-zA-Z0-9._-]+$', arg):
             return f"Invalid event name: {arg}"
+        from core.jailbreak import safe_exec
         r = safe_exec(f"activator send {shlex.quote(arg)}", timeout=5)
         if r["success"]:
             return f"Sent: {arg}"

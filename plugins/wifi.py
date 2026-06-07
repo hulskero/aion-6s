@@ -23,7 +23,13 @@ def _ifconfig_en0():
 
 
 def _ioreg_wifi():
-    props = ioreg_get_first("IO80211Interface")
+    for cls in ("AppleBCMWLANCore", "IO80211Interface"):
+        props = ioreg_get_first(cls)
+        if props:
+            break
+    else:
+        props = None
+
     if props:
         data = {}
         for src, dst in [
@@ -37,8 +43,11 @@ def _ioreg_wifi():
         return data if data else None
 
     try:
-        r = safe_exec("ioreg -rc IO80211Interface", timeout=8)
-        if not r["success"] or not r["stdout"].strip():
+        for cls in ("AppleBCMWLANCore", "IO80211Interface"):
+            r = safe_exec(f"ioreg -rc {cls}", timeout=8)
+            if r["success"] and r["stdout"].strip():
+                break
+        else:
             return None
         out = r["stdout"]
         data = {}

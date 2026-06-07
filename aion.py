@@ -493,10 +493,15 @@ RULES:
             c("ERR", f"  ✗ @plugin {name} {args} — not found")
             msg = f"Plugin '{name}' not found. Available: {list(self.plugins.keys())}"
             return {"success": False, "output": msg}
+        plugin = self.plugins[name]
+        if plugin.get("_lazy"):
+            from plugins import _load_plugin_module
+            plugin["run"] = _load_plugin_module(plugin)
+            plugin.pop("_lazy", None)
         t0 = time.time()
         c("GRY", f"  ◎ @plugin {name} {args}")
         try:
-            output = self.plugins[name]["run"](args)
+            output = plugin["run"](args)
             dur = time.time() - t0
             sys.stdout.write(f"  {ANSI['SYS']}✓{ANSI['RST']} ({dur:.1f}s)\n")
             if output:
@@ -514,12 +519,12 @@ RULES:
         if self.mode == "plan":
             c("GRY", f"  [plan] @shortcut {text}")
             print()
-            return {"success": False, "stdout": "", "stderr": "", "code": -1}
+            return {"success": False, "stdout": "", "stderr": "", "exit_code": -1}
         from core.input_validator import safe_shell_split
         parts = safe_shell_split(text)
         if not parts:
             cl("ERR", "  [shortcut] missing arguments")
-            return {"success": False, "stdout": "", "stderr": "missing arguments", "code": -1}
+            return {"success": False, "stdout": "", "stderr": "missing arguments", "exit_code": -1}
         action = parts[0]
         name = parts[1] if len(parts) > 1 else None
         inp = parts[2] if len(parts) > 2 else None
@@ -1130,8 +1135,7 @@ RULES:
         t.join(timeout)
         return result[0] if result[0] else None
 
-    def _read_event_file(self):
-        path = "/tmp/aion.state"
+    def _read_event_file(self, path="/tmp/aion.state"):
         try:
             if os.path.exists(path):
                 with open(path) as f:
@@ -1183,13 +1187,12 @@ RULES:
             cl("GRY", f"  Trigger handled: {trigger_result}")
             audit_log({"t": time.time(), "action": "trigger", "event": raw, "result": trigger_result})
 
-    def _listen_events(self):
+    def _listen_events(self, path="/tmp/aion.state"):
         import ctypes
         notify_post, notify_check, notify_token = self._setup_notify()
-        state_file = "/tmp/aion.state"
-        cl("SYS", "Event listener ready (notify_post + /tmp/aion.state)")
+        cl("SYS", f"Event listener ready (notify_post + {path})")
         cl("SYS", "Setup: Activator → Run Command →")
-        cl("SYS", '  echo "event:wifi_joined" > /tmp/aion.state && notify_post com.aion.event')
+        cl("SYS", f'  echo "event:wifi_joined" > {path} && notify_post com.aion.event')
         try:
             check_val = ctypes.c_int32()
             while True:
@@ -1197,7 +1200,7 @@ RULES:
                     check_val.value = 0
                     notify_check(notify_token, ctypes.byref(check_val))
                     if check_val.value:
-                        data = self._read_event_file()
+                        data = self._read_event_file(path)
                         if data:
                             self._handle_event(data)
                 time.sleep(0.5)

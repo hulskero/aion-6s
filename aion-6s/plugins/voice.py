@@ -1,6 +1,9 @@
+import logging
 import subprocess
 import os
 import time
+
+LOGGER = logging.getLogger(__name__)
 
 CLIPBOARD_FILE = os.path.expanduser("~/Library/Caches/com.apple.Pasteboard/General")
 CLIPBOARD_FILE2 = os.path.expanduser("~/Documents/aion_voice.txt")
@@ -29,11 +32,11 @@ Usage:
 def _clipboard_via_file():
     if os.path.exists(CLIPBOARD_FILE2):
         try:
-            data = open(CLIPBOARD_FILE2).read().strip()
+            with open(CLIPBOARD_FILE2) as f: data = f.read().strip()
             if data:
                 return data
         except Exception:
-            pass
+            LOGGER.debug("clipboard file read failed")
     return None
 
 
@@ -43,7 +46,7 @@ def _clipboard_via_pbpaste():
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
     except Exception:
-        pass
+        LOGGER.debug("pbpaste failed")
     return None
 
 

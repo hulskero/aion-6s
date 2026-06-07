@@ -2,9 +2,36 @@ import os
 import sys
 import importlib
 import importlib.util
+import ast
 
 
-def load_plugins(plugins_dir):
+def _extract_skill_info(path):
+    """Extract SKILL name and description from plugin file without executing it."""
+    try:
+        with open(path, "r") as f:
+            source = f.read()
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "SKILL":
+                        if isinstance(node.value, ast.Dict):
+                            skill = {}
+                            for k, v in zip(node.value.keys, node.value.values):
+                                if isinstance(k, ast.Constant):
+                                    key = k.value
+                                    if isinstance(v, ast.Constant):
+                                        skill[key] = v.value
+                                    elif key == "run":
+                                        continue
+                            if "name" in skill and "description" in skill:
+                                return skill["name"], skill["description"]
+    except Exception:
+        pass
+    return None, None
+
+
+def load_plugins(plugins_dir, lazy=True):
     plugins = {}
     if not os.path.isdir(plugins_dir):
         return plugins
@@ -17,6 +44,16 @@ def load_plugins(plugins_dir):
         name = f[:-3]
         path = os.path.join(plugins_path, f)
         try:
+            if lazy:
+                skill_name, description = _extract_skill_info(path)
+                if skill_name and description:
+                    plugins[skill_name] = {
+                        "name": skill_name,
+                        "description": description,
+                        "path": path,
+                        "_lazy": True,
+                    }
+                continue
             if name in sys.modules:
                 del sys.modules[name]
             spec = importlib.util.spec_from_file_location(name, path)
@@ -41,12 +78,24 @@ def load_plugins(plugins_dir):
     return plugins
 
 
+def _load_plugin_module(plugin_info):
+    """Load a plugin module from its path and return the run function."""
+    path = plugin_info["path"]
+    name = os.path.basename(path)[:-3]
+    if name in sys.modules:
+        del sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if hasattr(mod, "SKILL") and callable(mod.SKILL.get("run")):
+        return mod.SKILL["run"]
+    raise RuntimeError(f"Plugin {name}: SKILL['run'] not callable")
+
+
 def reload_plugins(plugins_dir):
-    # Nuke all plugin modules and their imported dependencies
     plugin_keys = [k for k in sys.modules if k.startswith("plugins.") or k == "plugins"]
     for k in plugin_keys:
         del sys.modules[k]
-    # Also clear any modules that plugins import from core/
     for name in list(sys.modules):
         if name.startswith("core."):
             del sys.modules[name]
@@ -57,20 +106,17 @@ def reload_plugins(plugins_dir):
         name = f[:-3]
         if name in sys.modules:
             del sys.modules[name]
-    return load_plugins(plugins_dir)
+    return load_plugins(plugins_dir, lazy=True)
 
 
 def install_plugin(name, url, plugins_dir):
-    """Download a .py plugin from URL, save to plugins_dir, load it."""
     import urllib.request
     import urllib.error
 
-    # Sanitize: strip directory traversal, enforce .py extension
     safe_name = os.path.basename(name)
     if not safe_name.endswith(".py"):
         safe_name += ".py"
     dest = os.path.join(plugins_dir, safe_name)
-    # Path traversal check: resolved dest must stay inside plugins_dir
     real_dest = os.path.realpath(dest)
     real_plugins = os.path.realpath(plugins_dir)
     if not real_dest.startswith(real_plugins + os.sep) and real_dest != real_plugins:
@@ -83,7 +129,7 @@ def install_plugin(name, url, plugins_dir):
         return None, f"Download failed: {e}"
     except Exception as e:
         return None, f"Error: {e}"
-    plugins = load_plugins(plugins_dir)
+    plugins = load_plugins(plugins_dir, lazy=True)
     plugin_name = name[:-3]
     if plugin_name in plugins:
         return plugins[plugin_name], None
@@ -91,7 +137,6 @@ def install_plugin(name, url, plugins_dir):
 
 
 def remove_plugin(name, plugins_dir):
-    """Remove a plugin from disk and memory."""
     if not name.endswith(".py"):
         name += ".py"
     path = os.path.join(plugins_dir, name)

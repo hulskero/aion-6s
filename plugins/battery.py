@@ -5,8 +5,19 @@ from core.jailbreak import safe_exec
 LOGGER = logging.getLogger(__name__)
 
 
+def _get_battery_props():
+    props = ioreg_get_first("AppleARMPMU")
+    if props:
+        for k in ("BatteryInstalled", "CurrentCapacity", "MaxCapacity",
+                   "CycleCount", "Temperature", "Voltage", "IsCharging",
+                   "AppleRawCurrentCapacity", "AppleRawMaxCapacity"):
+            if k in props:
+                return props
+    return ioreg_get_first("AppleSmartBattery")
+
+
 def run_battery(args=""):
-    props = ioreg_get_first("AppleSmartBattery")
+    props = _get_battery_props()
     if props:
         installed = props.get("BatteryInstalled")
         if installed is False:
