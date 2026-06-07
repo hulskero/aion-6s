@@ -2,10 +2,7 @@ import json
 import os
 import time
 import random
-import ssl
-import urllib.parse
-import urllib.request
-import urllib.error
+
 import socket
 import http.client
 import threading
@@ -73,8 +70,7 @@ class Bridge:
                     time.sleep(wait)
 
     def _wait_for_network(self, max_retries=3):
-        if self._network_ok:
-            return
+        import urllib.parse
         host = urllib.parse.urlparse(self.base_url).hostname
         port = urllib.parse.urlparse(self.base_url).port or 443
         for attempt in range(max_retries):
@@ -90,17 +86,19 @@ class Bridge:
                 time.sleep(5 + random.uniform(0, 3))
 
     def _build_opener(self):
+        import ssl, urllib.request
         try:
             ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
             return urllib.request.build_opener(
                 urllib.request.HTTPSHandler(context=ctx)
             )
         except Exception:
+            import warnings
+            warnings.warn("SSL context creation failed - using default opener")
             return urllib.request.build_opener()
 
     def _post(self, messages, stream=False):
+        import urllib.request, urllib.error
         if not self.api_key:
             raise APIError(
                 "No API key.\n"
@@ -110,7 +108,6 @@ class Bridge:
         self._wait_for_network()
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Connection": "close",
             "User-Agent": "AION-6S/1.0",
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -146,6 +143,7 @@ class Bridge:
                 hint = ""
             raise APIError(f"HTTP {code}: {detail}{hint}")
         except urllib.error.URLError as e:
+            self._network_ok = False
             reason = str(e.reason)
             if "timed out" in reason.lower():
                 hint = " — Connection timed out (check network / VPN)"
@@ -218,11 +216,12 @@ class Bridge:
             response.close()
 
     def stream(self, messages):
+        import urllib.error
         t0 = time.time()
         response = self._retry_post(messages, stream=True)
         self._last_usage = None
         try:
-            for retry in range(2):
+            for retry in range(3):
                 try:
                     for line_bytes in response:
                         line = line_bytes.decode("utf-8").strip()
@@ -246,8 +245,11 @@ class Bridge:
                         http.client.RemoteDisconnected, ConnectionAbortedError,
                         BrokenPipeError, OSError, http.client.IncompleteRead) as e:
                     response.close()
-                    if retry == 1:
-                        raise APIError(f"Stream interrupted after retry: {e}")
+                    self._network_ok = False
+                    if retry == 2:
+                        raise APIError(f"Stream interrupted after retries: {e}")
+                    wait = (retry + 1) * 2 + random.uniform(0, 1)
+                    time.sleep(wait)
                     response = self._retry_post(messages, stream=True)
         finally:
             response.close()

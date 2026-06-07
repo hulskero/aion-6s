@@ -23,7 +23,19 @@ def load_plugins(plugins_dir):
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             if hasattr(mod, "SKILL"):
-                plugins[mod.SKILL["name"]] = mod.SKILL
+                SKILL = mod.SKILL
+                if not isinstance(SKILL, dict):
+                    print(f"  [ERR] plugin {f}: SKILL must be a dict, got {type(SKILL).__name__}")
+                    continue
+                required_keys = {"name", "description", "run"}
+                missing = required_keys - set(SKILL.keys())
+                if missing:
+                    print(f"  [ERR] plugin {f}: SKILL missing: {missing}")
+                    continue
+                if not callable(SKILL.get("run")):
+                    print(f"  [ERR] plugin {f}: SKILL['run'] must be callable")
+                    continue
+                plugins[SKILL["name"]] = SKILL
         except Exception as e:
             print(f"  [ERR] plugin {name}: {e}")
     return plugins

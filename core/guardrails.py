@@ -88,6 +88,26 @@ BLOCKED = [
     (r'iptables\s+.*\-P\s+.*(DROP|ACCEPT)', "iptables policy change"),
     (r'ifconfig\s+.*down', "network interface down"),
     (r'ip\s+link\s+set\s+.*down', "ip link set down"),
+
+    # Network scanning and remote access (critical on jailbroken device)
+    (r'\bnc\b', "netcat (potential reverse shell)"),
+    (r'\bncat\b', "ncat (reverse shell)"),
+    (r'\bssh\b', "SSH connection"),
+    (r'\bscp\b', "SCP file transfer"),
+    (r'\btelnet\b', "Telnet connection"),
+    (r'\bnmap\b', "Network scanning"),
+
+    # Kernel and system manipulation on jailbroken device
+    (r'\bsysctl\s+-w\b', "sysctl kernel parameter write"),
+    (r'\becho\s+.*>\s*/dev/', "write to device memory"),
+
+    # Process killing
+    (r'\bkillall\b', "kill all processes"),
+
+    # Additional dangerous operations
+    (r'\blaunchctl\s+unload\b', "service removal"),
+    (r'\bdmesg\s+-c\b', "clear kernel ring buffer"),
+    (r'\bdd\s+if=/dev/urandom', "overwrite with random data"),
 ]
 
 DESTRUCTIVE = [
@@ -123,6 +143,17 @@ DESTRUCTIVE = [
     r'\blvm\s+',
     r'\bvg\s+',
     r'\blv\s+',
+    r'\bnc\b',
+    r'\bncat\b',
+    r'\bssh\b',
+    r'\bscp\b',
+    r'\btelnet\b',
+    r'\bnmap\b',
+    r'\bsysctl\b',
+    r'\bkilla',
+    r'\bkillall\b',
+    r'\blaunchctl\b',
+    r'\bdmesg\b',
 ]
 
 _proactive_yes = False

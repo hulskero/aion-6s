@@ -88,15 +88,12 @@ def _obfuscate_secrets(text):
     return text
 
 MAX_AUDIT_BYTES = 1_048_576  # 1 MB
-_audit_count = 0
+_AUDIT_BUFFER = []
+_AUDIT_FLUSH_INTERVAL = 5
 
 
 def _rotate_audit_log():
     """Truncate audit log to last 1000 lines if >1MB. Checks every 10 writes."""
-    global _audit_count
-    _audit_count += 1
-    if _audit_count % 10 != 0:
-        return
     try:
         if os.path.getsize(AUDIT_LOG) > MAX_AUDIT_BYTES:
             with open(AUDIT_LOG) as f:
@@ -107,28 +104,38 @@ def _rotate_audit_log():
         pass
 
 
+def _flush_audit_buffer():
+    if not _AUDIT_BUFFER:
+        return
+    try:
+        with open(AUDIT_LOG, "a") as f:
+            if fcntl:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                for entry in _AUDIT_BUFFER:
+                    f.write(json.dumps(entry) + "\n")
+            finally:
+                if fcntl:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        _AUDIT_BUFFER.clear()
+    except Exception:
+        pass
+
+
 def audit_log(entry):
-    """Thread-safe audit logging with file locking and secret obfuscation."""
     _rotate_audit_log()
     try:
-        # Shallow copy + obfuscate only cmd/reason (avoids deepcopy + recursive walk)
         obfuscated = {}
         for k, v in entry.items():
             if isinstance(v, str):
                 obfuscated[k] = _obfuscate_secrets(v)
             else:
                 obfuscated[k] = v
-
-        with open(AUDIT_LOG, "a") as f:
-            if fcntl:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                f.write(json.dumps(obfuscated) + "\n")
-            finally:
-                if fcntl:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        _AUDIT_BUFFER.append(obfuscated)
+        if len(_AUDIT_BUFFER) >= _AUDIT_FLUSH_INTERVAL:
+            _flush_audit_buffer()
     except Exception:
-        pass  # Fail gracefully on iOS filesystem restrictions
+        pass
 
 
 SESSION_DIR = os.path.join(os.path.dirname(__file__), "sessions")
@@ -1168,6 +1175,7 @@ RULES:
             try:
                 line = input(f"{ANSI['WARN']}{self.mode}>{ANSI['RST']} ")
             except (EOFError, KeyboardInterrupt):
+                _flush_audit_buffer()
                 cl("SYS", "\nBye.")
                 break
 

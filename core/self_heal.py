@@ -48,8 +48,10 @@ class SelfHeal:
             if len(self._cache) > 1000:
                 for k in list(self._cache)[:-500]:
                     del self._cache[k]
-            with open(self._cache_path, "w") as f:
+            tmp = self._cache_path + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump(self._cache, f, indent=2)
+            os.replace(tmp, self._cache_path)
         except Exception:
             pass
 

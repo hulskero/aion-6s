@@ -1,11 +1,11 @@
 import re
 import shutil
-from core.jailbreak import safe_exec
 
 
 def _ioreg_batt():
     """Read battery via ioreg (works on macOS, may work on jailbroken iOS)."""
     try:
+        from core.jailbreak import safe_exec
         r = safe_exec("ioreg -w 0 -rc AppleSmartBattery", timeout=8)
         if not r["success"] or not r["stdout"].strip():
             return None
@@ -27,6 +27,7 @@ def _ioreg_batt():
 
 def _pmset_batt():
     try:
+        from core.jailbreak import safe_exec
         r = safe_exec("pmset -g batt", timeout=5)
         if not r["success"] and not r["stdout"]:
             return None
