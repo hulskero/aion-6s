@@ -1,6 +1,6 @@
-import subprocess
 import re
 import shutil
+from core.jailbreak import safe_exec
 
 
 def _ioreg_display():
@@ -15,12 +15,10 @@ def _ioreg_display():
     ]
     for args in paths:
         try:
-            r = subprocess.run(
-                ["ioreg"] + args, capture_output=True, text=True, timeout=8
-            )
-            if r.returncode != 0 or not r.stdout.strip():
+            r = safe_exec("ioreg " + " ".join(args), timeout=8)
+            if not r["success"] or not r["stdout"].strip():
                 continue
-            out = r.stdout
+            out = r["stdout"]
             def _get(k):
                 m = re.search(rf'"{k}"\s*=\s*(\S+)', out)
                 return m.group(1).rstrip(",") if m else None
@@ -41,17 +39,12 @@ def _ioreg_display():
 def _sysctl_display():
     """Fallback: basic display info via sysctl."""
     try:
-        r = subprocess.run(
-            ["sysctl", "-n", "hw.memsize"],
-            capture_output=True, text=True, timeout=5
-        )
+        r = safe_exec("sysctl -n hw.memsize", timeout=5)
         data = {}
         for key in ("hw.pagesize", "kern.bootargs"):
-            r2 = subprocess.run(
-                ["sysctl", "-n", key], capture_output=True, text=True, timeout=5
-            )
-            if r2.returncode == 0 and r2.stdout.strip():
-                data[key.split(".")[-1]] = r2.stdout.strip()[:60]
+            r2 = safe_exec(f"sysctl -n {key}", timeout=5)
+            if r2["success"] and r2["stdout"].strip():
+                data[key.split(".")[-1]] = r2["stdout"].strip()[:60]
         return data if data else None
     except Exception:
         return None

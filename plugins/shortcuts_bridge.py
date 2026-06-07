@@ -1,4 +1,5 @@
 import shutil
+import shlex
 import urllib.parse
 from core.jailbreak import safe_exec
 
@@ -43,9 +44,9 @@ def _list_via_springcuts():
 
 def _run_via_springcuts(name, inp=""):
     if inp:
-        cmd = f'springcuts -r "{name}" -p "{inp}" -w'
+        cmd = f'springcuts -r {shlex.quote(name)} -p {shlex.quote(inp)} -w'
     else:
-        cmd = f'springcuts -r "{name}" -w'
+        cmd = f'springcuts -r {shlex.quote(name)} -w'
     r = safe_exec(cmd, timeout=30)
     return r
 
@@ -55,6 +56,8 @@ def _run_via_url(name, inp=""):
     url = f"shortcuts://run-shortcut?name={urllib.parse.quote(name, safe='')}"
     if inp:
         url += f"&input=text&text={urllib.parse.quote(inp, safe='')}"
+    if not shutil.which("open"):
+        return {"success": False, "stdout": "", "stderr": "open not available", "code": -1}
     try:
         subprocess.run(["open", url], capture_output=True, timeout=5)
     except Exception:
@@ -88,8 +91,7 @@ def run_shortcuts_bridge(args=""):
             if r["success"] and r["stdout"].strip():
                 return f"Shortcut '{name}':\n{r['stdout'][:2000]}"
         if has_shortcuts:
-            safe_name = name.replace("'", "'\\''")
-            r = safe_exec(f"shortcuts run '{safe_name}'", timeout=30)
+            r = safe_exec(f"shortcuts run {shlex.quote(name)}", timeout=30)
             if r["success"]:
                 return f"Shortcut '{name}' completed."
         # Fallback: x-callback-url

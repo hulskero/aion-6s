@@ -45,33 +45,36 @@ class SelfHeal:
 
     def _save_cache(self):
         try:
+            if len(self._cache) > 1000:
+                for k in list(self._cache)[:-500]:
+                    del self._cache[k]
             with open(self._cache_path, "w") as f:
                 json.dump(self._cache, f, indent=2)
         except Exception:
             pass
 
     def heal(self, cmd, stderr):
-        self.history.append({"cmd": cmd, "error": stderr})
+        cmd_s = sanitize(cmd)
+        err_s = sanitize(stderr)
+        self.history.append({"cmd": cmd_s, "error": err_s})
 
         for absent in IOS_ABSENT:
-            if absent in cmd and "not found" in stderr.lower():
-                self._cache[hashlib.md5(cmd.encode()).hexdigest()] = f"FAIL {absent} not available on iOS"
+            if absent in cmd_s and "not found" in err_s.lower():
+                self._cache[hashlib.md5(cmd_s.encode()).hexdigest()] = f"FAIL {absent} not available on iOS"
                 self._save_cache()
                 return None
 
-        cache_key = hashlib.md5((cmd.strip() + stderr.strip()[-300:]).encode()).hexdigest()
+        cache_key = hashlib.md5((cmd_s.strip() + err_s.strip()[-300:]).encode()).hexdigest()
         cached = self._cache.get(cache_key)
-        if cached and cached != cmd:
+        if cached and cached != cmd_s:
             if not cached.startswith("FAIL"):
                 return cached
-
-        sanitized_err = sanitize(stderr)
 
         for attempt in range(self.max_tries):
             prompt = f"""Command failed. Fix it.
 
-CMD: {cmd}
-ERR: {sanitized_err}
+CMD: {cmd_s}
+ERR: {err_s}
 
 Output ONLY the fixed shell command, nothing else.
 If impossible, output: FAIL <reason>"""

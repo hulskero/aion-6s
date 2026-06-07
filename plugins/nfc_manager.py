@@ -1,6 +1,8 @@
-import subprocess
 import os
 import shutil
+import shlex
+import subprocess
+from core.jailbreak import safe_exec
 
 
 def _rc_path():
@@ -12,19 +14,20 @@ def nfc_scan(args=""):
 
     if shutil.which("rc"):
         try:
-            r = subprocess.run(["rc", "nfc", "scan"], capture_output=True, text=True, timeout=10)
-            if r.returncode == 0:
-                lines.append(f"  rc: {r.stdout.strip()}")
+            r = safe_exec("rc nfc scan", timeout=10)
+            if r["success"]:
+                lines.append(f"  rc: {r['stdout'].strip()}")
                 return "\n".join(lines)
-            lines.append(f"  rc failed: {r.stderr.strip()}")
+            lines.append(f"  rc failed: {r['stderr'].strip()}")
         except Exception as e:
             lines.append(f"  rc error: {e}")
 
     lines.append("  Opening Shortcuts NFC scanner (if configured)...")
-    subprocess.run(
-        ["open", "shortcuts://run-shortcut?name=ScanNFC"],
-        capture_output=True, timeout=5
-    )
+    if shutil.which("open"):
+        subprocess.run(
+            ["open", "shortcuts://run-shortcut?name=ScanNFC"],
+            capture_output=True, timeout=5
+        )
 
     return "\n".join(lines)
 
@@ -35,12 +38,11 @@ def nfc_write(args=""):
 
     if shutil.which("rc") or os.path.exists("/var/jb/usr/bin/rc"):
         try:
-            r = subprocess.run(
-                ["rc", "nfc", "write", data], capture_output=True, text=True, timeout=10
-            )
-            if r.returncode == 0:
-                lines.append(f"  OK: {r.stdout.strip()}")
+            r = safe_exec(f"rc nfc write {shlex.quote(data)}", timeout=10)
+            if r["success"]:
+                lines.append(f"  OK: {r['stdout'].strip()}")
                 return "\n".join(lines)
+            lines.append(f"  rc failed: {r['stderr'].strip()}")
         except Exception as e:
             lines.append(f"  rc error: {e}")
 

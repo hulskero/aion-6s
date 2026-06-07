@@ -13,8 +13,12 @@ def _ioreg_batt():
         def get(k):
             m = re.search(rf'"{k}"\s*=\s*(\S+)', out)
             return m.group(1).rstrip(",") if m else "?"
-        pct = float(get("CurrentCapacity")) / float(get("MaxCapacity")) * 100 if get("MaxCapacity") != "?" else "?"
-        pct = f"{pct:.0f}" if isinstance(pct, float) else "?"
+        try:
+            cur = float(get("CurrentCapacity"))
+            max_cap = float(get("MaxCapacity"))
+            pct = f"{cur / max_cap * 100:.0f}" if max_cap else "?"
+        except (ValueError, ZeroDivisionError):
+            pct = "?"
         charging = "charging" if get("IsCharging") == "Yes" else "discharging"
         return f"Battery: {pct}%, {charging}"
     except Exception:

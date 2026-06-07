@@ -1,6 +1,7 @@
 import shutil
-import subprocess
+import shlex
 import os
+from core.jailbreak import safe_exec
 
 TOOLS_CHECK = [
     ("apt", "Package manager"),
@@ -60,18 +61,13 @@ def _install_pkg(pkg):
     if not pkg:
         return "Usage: @plugin tools install <package>"
     try:
-        r = subprocess.run(
-            ["apt", "install", "-y", pkg],
-            capture_output=True, text=True, timeout=120
-        )
-        if r.returncode == 0:
-            out = r.stdout.strip()[-600:]
+        r = safe_exec(f"apt install -y {shlex.quote(pkg)}", timeout=120)
+        if r["success"]:
+            out = r["stdout"].strip()[-600:]
             return f"Installed {pkg}:\n{out}" if out else f"Installed {pkg}"
         else:
-            err = (r.stderr.strip() or r.stdout.strip())[-400:]
+            err = (r["stderr"].strip() or r["stdout"].strip())[-400:]
             return f"Failed to install {pkg}:\n{err}"
-    except subprocess.TimeoutExpired:
-        return f"Timeout installing {pkg} (apt may still be running in background)"
     except Exception as e:
         return f"Error: {e}"
 

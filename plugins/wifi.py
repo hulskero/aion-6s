@@ -1,15 +1,15 @@
-import subprocess
 import re
 import shutil
+from core.jailbreak import safe_exec
 
 
 def _ifconfig_en0():
     """Basic WiFi info from ifconfig (always works, no extra packages)."""
     try:
-        r = subprocess.run(["ifconfig", "en0"], capture_output=True, text=True, timeout=8)
-        if r.returncode != 0:
+        r = safe_exec("ifconfig en0", timeout=8)
+        if not r["success"]:
             return {}
-        out = r.stdout
+        out = r["stdout"]
         data = {}
         m = re.search(r'status:\s*(\S+)', out)
         data["status"] = m.group(1) if m else "unknown"
@@ -27,13 +27,10 @@ def _ioreg_wifi():
     if not shutil.which("ioreg"):
         return None
     try:
-        r = subprocess.run(
-            ["ioreg", "-rc", "IO80211Interface"],
-            capture_output=True, text=True, timeout=8
-        )
-        if r.returncode != 0 or not r.stdout.strip():
+        r = safe_exec("ioreg -rc IO80211Interface", timeout=8)
+        if not r["success"] or not r["stdout"].strip():
             return None
-        out = r.stdout
+        out = r["stdout"]
         data = {}
         def get(k):
             m = re.search(rf'"{k}"\s*=\s*(\S+)', out)

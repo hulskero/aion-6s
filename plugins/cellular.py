@@ -1,18 +1,15 @@
-import subprocess
 import re
 import shutil
+from core.jailbreak import safe_exec
 
 
 def _ifconfig_cell():
     """Basic cellular info from ifconfig pdp_ip0."""
     try:
-        r = subprocess.run(
-            ["ifconfig", "pdp_ip0"],
-            capture_output=True, text=True, timeout=8
-        )
-        if r.returncode != 0 or not r.stdout.strip():
+        r = safe_exec("ifconfig pdp_ip0", timeout=8)
+        if not r["success"] or not r["stdout"].strip():
             return {}
-        out = r.stdout
+        out = r["stdout"]
         data = {}
         m = re.search(r'inet\s+(\S+)', out)
         data["ip"] = m.group(1) if m else "?"
@@ -35,12 +32,10 @@ def _ioreg_cellular():
     ]
     for args, keys in targets:
         try:
-            r = subprocess.run(
-                ["ioreg"] + args, capture_output=True, text=True, timeout=8
-            )
-            if r.returncode != 0 or not r.stdout.strip():
+            r = safe_exec("ioreg " + " ".join(args), timeout=8)
+            if not r["success"] or not r["stdout"].strip():
                 continue
-            out = r.stdout
+            out = r["stdout"]
             def _get(k):
                 m = re.search(rf'"{k}"\s*=\s*(\S+)', out)
                 if m:
