@@ -1192,6 +1192,21 @@ RULES:
                 self._handle_special(line)
                 continue
 
+            if line.startswith("!"):
+                cmd = line[1:].strip()
+                if not cmd:
+                    cl("ERR", "Usage: !<command>")
+                    continue
+                r = self.jailbreak.run(cmd, timeout=15)
+                out = r["stdout"].strip()
+                err = r["stderr"].strip()
+                if out:
+                    for l_i, line_out in enumerate(out.splitlines()):
+                        cl("SYS" if line_out else "GRY", f"  {line_out}")
+                if err:
+                    cl("ERR", f"  {err[:500]}")
+                continue
+
             self.memory.add("user", line)
 
             response = self._stream(gray=False)

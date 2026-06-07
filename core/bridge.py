@@ -2,6 +2,7 @@ import json
 import os
 import time
 import random
+import ssl
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -88,7 +89,15 @@ class Bridge:
                 time.sleep(5 + random.uniform(0, 3))
 
     def _build_opener(self):
-        return urllib.request.build_opener()
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            return urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=ctx)
+            )
+        except Exception:
+            return urllib.request.build_opener()
 
     def _post(self, messages, stream=False):
         if not self.api_key:
