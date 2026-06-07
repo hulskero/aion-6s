@@ -195,10 +195,10 @@ if sel is not None:
 sel_init = _sel("init")
 test("_sel('init') also works", sel_init is not None)
 
-# Not a real class — should still work (returns 0/NULL, not exception)
+# Not a real class — should return None (NULL pointer) without exception
 cls_nonexistent = _cls("NonExistentClass12345")
-test("_cls('NonExistentClass12345') returns 0/NULL without exception",
-     cls_nonexistent is not None)  # objc_getClass returns 0 not None
+test("_cls('NonExistentClass12345') returns None (NULL) without exception",
+     cls_nonexistent is None)  # objc_getClass returns NULL → ctypes converts to None
 
 sel_nonexistent = _sel("nonExistentSelector12345")
 test("_sel('nonExistentSelector12345') returns value (sel_registerName creates it)",
