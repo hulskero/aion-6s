@@ -1,71 +1,76 @@
-import os
 import shutil
-import shlex
-import subprocess
 from core.jailbreak import safe_exec
 
 
-def _rc_path():
-    return shutil.which("rc") or "/var/jb/usr/bin/rc"
+_NFC_STATUS = None
 
 
-def nfc_scan(args=""):
-    lines = ["[NFC] Attempting tag scan..."]
+def _check_nfc():
+    global _NFC_STATUS
+    if _NFC_STATUS is not None:
+        return _NFC_STATUS
 
-    if shutil.which("rc"):
-        try:
-            r = safe_exec("rc nfc scan", timeout=10)
-            if r["success"]:
-                lines.append(f"  rc: {r['stdout'].strip()}")
-                return "\n".join(lines)
-            lines.append(f"  rc failed: {r['stderr'].strip()}")
-        except Exception as e:
-            lines.append(f"  rc error: {e}")
+    r = safe_exec("launchctl list | grep nfcd", timeout=5)
+    nfcd_running = r["success"]
 
-    lines.append("  Opening Shortcuts NFC scanner (if configured)...")
-    if shutil.which("open"):
-        subprocess.run(
-            ["open", "shortcuts://run-shortcut?name=ScanNFC"],
-            capture_output=True, timeout=5
-        )
+    patches = [
+        ("/usr/lib/NFCD", "nfcd patch"),
+        ("/Library/MobileSubstrate/DynamicLibraries/NFCD.dylib", "NFCWriter"),
+    ]
+    found_patch = any(__import__('os').path.exists(p) for p, _ in patches)
 
-    return "\n".join(lines)
+    if nfcd_running and found_patch:
+        _NFC_STATUS = "patched"
+    elif nfcd_running:
+        _NFC_STATUS = "running"
+    else:
+        _NFC_STATUS = "unavailable"
 
-
-def nfc_write(args=""):
-    data = args.strip() or "Hello from AION-6S"
-    lines = [f"[NFC] Writing tag: \"{data}\""]
-
-    if shutil.which("rc") or os.path.exists("/var/jb/usr/bin/rc"):
-        try:
-            r = safe_exec(f"rc nfc write {shlex.quote(data)}", timeout=10)
-            if r["success"]:
-                lines.append(f"  OK: {r['stdout'].strip()}")
-                return "\n".join(lines)
-            lines.append(f"  rc failed: {r['stderr'].strip()}")
-        except Exception as e:
-            lines.append(f"  rc error: {e}")
-
-    lines.append("  NFC write not available on this device.")
-    return "\n".join(lines)
+    return _NFC_STATUS
 
 
 def nfc_manager(args=""):
-    """Unified NFC plugin - handles scan and write subcommands"""
+    status = _check_nfc()
+
+    lines = ["[NFC]"]
+
+    if status == "unavailable":
+        lines.append("  iPhone 6s NFC is locked to Apple Pay.")
+        lines.append("  Requires nfcd patch (e.g. NFCWriter XS from Sileo)")
+        lines.append("  for third-party tag reading/writing.")
+        return "\n".join(lines)
+
+    if status == "running":
+        lines.append("  nfcd running but no NFC patch detected.")
+        lines.append("  Install NFCWriter XS for tag support.")
+        return "\n".join(lines)
+
     parts = args.strip().split(None, 1)
-    command = (parts[0] if parts else "scan").lower()
+    cmd = parts[0].lower() if parts else "scan"
     data = parts[1] if len(parts) > 1 else ""
 
-    if command == "scan":
-        return nfc_scan()
-    elif command == "write":
-        return nfc_write(data)
+    if cmd == "scan":
+        lines.append("  Scanning for NFC tag...")
+        r = safe_exec("rc nfc scan", timeout=10)
+        if r["success"]:
+            lines.append(f"  Tag: {r['stdout'].strip()}")
+        else:
+            lines.append("  No tag found.")
+    elif cmd == "write" and data:
+        lines.append(f'  Writing: "{data}"')
+        r = safe_exec(f"rc nfc write {__import__('shlex').quote(data)}", timeout=10)
+        if r["success"]:
+            lines.append(f"  OK: {r['stdout'].strip()}")
+        else:
+            lines.append("  Write failed.")
     else:
-        return "[NFC] Usage: @plugin nfc_manager [scan|write \"data\"]\n  scan - Scan for NFC tag\n  write \"data\" - Write data to NFC tag"
+        lines.append("  Usage: nfc_manager [scan|write <data>]")
+
+    return "\n".join(lines)
 
 
 SKILL = {
     "name": "nfc_manager",
-    "description": "Scan and write NFC tags via jailbreak tools (rc) or Shortcuts fallback",
+    "description": "NFC tag scan/write — requires NFCWriter XS patch (iPhone 6s NFC locked to Apple Pay without it)",
     "run": nfc_manager,
 }
