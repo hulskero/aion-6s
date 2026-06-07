@@ -31,6 +31,7 @@ class Bridge:
     }
 
     def __init__(self, config):
+        config = config if config is not None else {}
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
         self.base_url = config.get("base_url", "https://integrate.api.nvidia.com/v1")
         self.model = config.get("model", "deepseek-ai/deepseek-v4-flash")

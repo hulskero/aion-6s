@@ -19,6 +19,9 @@ class MemoryManager:
             return
         self.context.append({"role": role, "content": content})
         self._msg_count += 1
+        if self.max_pairs <= 0:
+            self._trim_tool_msgs()
+            return
         sys_idx = 1 if len(self.context) > 1 and self.context[0]["role"] == "system" else 0
         user_assistant = [m for m in self.context[sys_idx:] if m["role"] in ("user", "assistant")]
         max_pairs = self.max_pairs * 2
@@ -56,7 +59,20 @@ class MemoryManager:
             gc.collect()
 
     def cleanup(self):
-        pass
+        sys_idx = 1 if len(self.context) > 1 and self.context[0]["role"] == "system" else 0
+        user_assistant = [m for m in self.context[sys_idx:] if m["role"] in ("user", "assistant")]
+        max_allowed = self.max_pairs * 2
+        if len(user_assistant) > max_allowed:
+            excess = len(user_assistant) - max_allowed
+            keep = self.context[:sys_idx]
+            for msg in self.context[sys_idx:]:
+                if excess > 0 and msg["role"] in ("user", "assistant"):
+                    excess -= 1
+                    continue
+                keep.append(msg)
+            self.context = keep
+        self._msg_count = len(self.context)
+        self._smart_gc()
 
     def count_chars(self):
         total = 0

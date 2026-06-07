@@ -66,7 +66,7 @@ class SelfHeal:
 
         cache_key = hashlib.md5((cmd_s.strip() + err_s.strip()[-300:]).encode()).hexdigest()
         cached = self._cache.get(cache_key)
-        if cached and cached != cmd_s:
+        if cached:
             if not cached.startswith("FAIL"):
                 return cached
 
@@ -78,10 +78,15 @@ ERR: {err_s}
 
 Output ONLY the fixed shell command, nothing else.
 If impossible, output: FAIL <reason>"""
-            fix = self.bridge.chat([
-                {"role": "system", "content": "Output ONLY the fixed command or FAIL <reason>."},
-                {"role": "user", "content": prompt},
-            ])
+            try:
+                fix = self.bridge.chat([
+                    {"role": "system", "content": "Output ONLY the fixed command or FAIL <reason>."},
+                    {"role": "user", "content": prompt},
+                ])
+            except Exception:
+                self._cache[cache_key] = "FAIL api_error"
+                self._save_cache()
+                return None
             fix = fix.strip().strip("`").strip()
             if fix.startswith("FAIL") or fix.startswith("@FAIL"):
                 self._cache[cache_key] = f"FAIL {fix}"
