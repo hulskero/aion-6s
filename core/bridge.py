@@ -2,6 +2,7 @@ import json
 import os
 import time
 import random
+import urllib.parse
 import urllib.request
 import urllib.error
 import socket
@@ -36,7 +37,7 @@ class Bridge:
         self.temperature = config.get("temperature", self.DEFAULTS["temperature"])
         self.request_timeout = config.get("request_timeout", self.DEFAULTS["request_timeout"])
         self.rate_limit = config.get("rate_limit", self.DEFAULTS["rate_limit"])
-        self._retry_max = 3
+        self._retry_max = 5
         self._last_latency = 0
         self._last_usage = None
         self._call_timestamps = deque()
@@ -63,10 +64,24 @@ class Bridge:
                 time.sleep(wait)
         d.append(now)
 
+    def _wait_for_network(self, max_retries=3):
+        host = urllib.parse.urlparse(self.base_url).hostname
+        port = 443
+        for attempt in range(max_retries):
+            try:
+                sock = socket.create_connection((host, port), timeout=10)
+                sock.close()
+                return
+            except (socket.timeout, OSError):
+                if attempt == max_retries - 1:
+                    raise APIError(f"Network unreachable: {host}:{port}")
+                time.sleep(5 + random.uniform(0, 3))
+
     def _build_opener(self):
         return urllib.request.build_opener()
 
     def _post(self, messages, stream=False):
+        self._wait_for_network()
         if not self.api_key:
             raise APIError(
                 "No API key.\n"
@@ -146,15 +161,26 @@ class Bridge:
                     wait = (attempt + 1) * 10 + random.uniform(0, 5)
                     time.sleep(wait)
                     continue
+                if "timed out" in estr.lower():
+                    if attempt == self._retry_max - 1:
+                        raise
+                    wait = (attempt + 1) * 15 + random.uniform(0, 10)
+                    time.sleep(wait)
+                    continue
                 if attempt == self._retry_max - 1:
                     raise
-                wait = (attempt + 1) * 2 + random.uniform(0, 2)
+                wait = (attempt + 1) * 5 + random.uniform(0, 3)
                 time.sleep(wait)
+                continue
 
     def chat(self, messages):
         t0 = time.time()
         response = self._retry_post(messages, stream=False)
-        data = json.loads(response.read())
+        try:
+            raw = response.read()
+            data = json.loads(raw)
+        except (socket.timeout, ConnectionResetError, json.JSONDecodeError) as e:
+            raise APIError(f"Chat response read failed: {e}")
         self._last_latency = time.time() - t0
         self._last_usage = data.get("usage")
         return data["choices"][0]["message"]["content"]
@@ -163,27 +189,31 @@ class Bridge:
         t0 = time.time()
         response = self._retry_post(messages, stream=True)
         self._last_usage = None
-        try:
-            for line_bytes in response:
-                line = line_bytes.decode("utf-8").strip()
-                if not line:
-                    continue
-                if line == "data: [DONE]":
-                    break
-                if line.startswith("data: "):
-                    try:
-                        chunk = json.loads(line[6:])
-                        if "usage" in chunk:
-                            self._last_usage = chunk["usage"]
-                        delta = chunk["choices"][0]["delta"]
-                        content = delta.get("content")
-                        if content is not None:
-                            yield content
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        pass
-        except (socket.timeout, urllib.error.URLError, ConnectionResetError,
-                http.client.RemoteDisconnected) as e:
-            raise APIError(f"Stream interrupted: {e}")
+        for retry in range(2):
+            try:
+                for line_bytes in response:
+                    line = line_bytes.decode("utf-8").strip()
+                    if not line:
+                        continue
+                    if line == "data: [DONE]":
+                        break
+                    if line.startswith("data: "):
+                        try:
+                            chunk = json.loads(line[6:])
+                            if "usage" in chunk:
+                                self._last_usage = chunk["usage"]
+                            delta = chunk["choices"][0]["delta"]
+                            content = delta.get("content")
+                            if content is not None:
+                                yield content
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            pass
+                break
+            except (socket.timeout, urllib.error.URLError, ConnectionResetError,
+                    http.client.RemoteDisconnected) as e:
+                if retry == 1:
+                    raise APIError(f"Stream interrupted after retry: {e}")
+                response = self._retry_post(messages, stream=True)
         self._last_latency = time.time() - t0
 
     def get_usage(self):
