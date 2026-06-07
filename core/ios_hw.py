@@ -1,4 +1,3 @@
-import ctypes
 import platform
 import plistlib
 import re
@@ -24,7 +23,8 @@ _kCFNumberFloat64 = 13
 
 
 def _load():
-    global _iokit, _cf, _CTYPES_READY
+    global _iokit, _cf, _CTYPES_READY, ctypes
+    import ctypes
     if _CTYPES_READY:
         return True
     try:

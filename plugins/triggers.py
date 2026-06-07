@@ -1,8 +1,11 @@
+import logging
 import os
 import json
 import fnmatch
 from core.jailbreak import safe_exec
 from core.guardrails import check as guard_check
+
+LOGGER = logging.getLogger(__name__)
 
 CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -49,7 +52,7 @@ def _load():
             with open(CONFIG_PATH) as f:
                 return json.load(f)
     except Exception:
-        pass
+        LOGGER.debug("triggers config load failed")
     return {}
 
 
@@ -169,7 +172,7 @@ def _notify_post(name):
         libc.notify_post.argtypes = [ctypes.c_char_p]
         libc.notify_post(name.encode())
     except Exception:
-        pass
+        LOGGER.debug("notify_post failed")
 
 
 SKILL = {

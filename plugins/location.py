@@ -1,7 +1,10 @@
+import logging
 import subprocess
 import json
 import os
 import shutil
+
+LOGGER = logging.getLogger(__name__)
 
 GPS_FILE = os.path.expanduser("~/Documents/gps.json")
 
@@ -38,7 +41,7 @@ def _gps_file():
         if lat is not None and lon is not None:
             return f"GPS: {lat}, {lon}  |  accuracy: ±{acc}m  |  at: {ts}"
     except Exception:
-        pass
+        LOGGER.debug("gps file read failed")
     return None
 
 

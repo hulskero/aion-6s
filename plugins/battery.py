@@ -1,5 +1,8 @@
+import logging
 from core.ios_hw import ioreg_get_first
 from core.jailbreak import safe_exec
+
+LOGGER = logging.getLogger(__name__)
 
 
 def run_battery(args=""):
@@ -65,7 +68,7 @@ def run_battery(args=""):
                     parts.append(f"{k}: {v}")
             return "  ".join(parts)
     except Exception:
-        pass
+        LOGGER.debug("battery ioreg failed")
 
     return "Battery: not available on this device"
 

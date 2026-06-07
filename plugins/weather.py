@@ -1,7 +1,10 @@
 import json
+import logging
 import shlex
 import urllib.parse
 from core.jailbreak import safe_exec
+
+LOGGER = logging.getLogger(__name__)
 
 WMO_CODES = {
     0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
@@ -25,7 +28,7 @@ def _wttrin(location):
         if r["success"] and r["stdout"].strip():
             return r["stdout"].strip()
     except Exception:
-        pass
+        LOGGER.debug("wttr.in weather fetch failed")
     return None
 
 def _openmeteo(location):
@@ -50,7 +53,7 @@ def _openmeteo(location):
         code = WMO_CODES.get(w["weather_code"], f"Code {w['weather_code']}")
         return f"{loc_name}: {w['temperature_2m']}°C, {code}, wind {w['wind_speed_10m']} km/h"
     except Exception:
-        pass
+        LOGGER.debug("open-meteo weather fetch failed")
     return None
 
 def run_weather(args=""):

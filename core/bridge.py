@@ -8,6 +8,11 @@ import http.client
 import threading
 from collections import deque
 
+import ssl
+_SSL_CONTEXT = ssl.create_default_context()
+_SSL_CONTEXT.check_hostname = False
+_SSL_CONTEXT.verify_mode = ssl.CERT_NONE
+
 
 class APIError(Exception):
     pass
@@ -22,7 +27,7 @@ class Bridge:
 
     DEFAULTS = {
         "max_tokens": 256,
-        "request_timeout": 200,
+        "request_timeout": 45,
         "rate_limit": 30,
         "temperature": 0.1,
     }
@@ -73,6 +78,13 @@ class Bridge:
         import urllib.parse
         host = urllib.parse.urlparse(self.base_url).hostname
         port = urllib.parse.urlparse(self.base_url).port or 443
+        try:
+            sock = socket.create_connection((host, port), timeout=3)
+            sock.close()
+            self._network_ok = True
+            return
+        except (socket.timeout, OSError):
+            pass
         for attempt in range(max_retries):
             try:
                 sock = socket.create_connection((host, port), timeout=10)
@@ -86,11 +98,10 @@ class Bridge:
                 time.sleep(5 + random.uniform(0, 3))
 
     def _build_opener(self):
-        import ssl, urllib.request
+        import urllib.request
         try:
-            ctx = ssl.create_default_context()
             return urllib.request.build_opener(
-                urllib.request.HTTPSHandler(context=ctx)
+                urllib.request.HTTPSHandler(context=_SSL_CONTEXT)
             )
         except Exception:
             import warnings
@@ -172,22 +183,22 @@ class Bridge:
                 if "504" in estr:
                     if attempt == self._retry_max - 1:
                         raise
-                    wait = (attempt + 1) * 5 + random.uniform(0, 3)
+                    wait = min(2 * (2 ** attempt), 30) + random.uniform(0, 2)
                     time.sleep(wait)
                     continue
                 if "429" in estr and attempt < self._retry_max - 1:
-                    wait = (attempt + 1) * 10 + random.uniform(0, 5)
+                    wait = min(2 * (2 ** attempt), 30) + random.uniform(0, 5)
                     time.sleep(wait)
                     continue
                 if "timed out" in estr.lower() or "unreachable" in estr.lower():
                     if attempt == self._retry_max - 1:
                         raise
-                    wait = (attempt + 1) * 15 + random.uniform(0, 10)
+                    wait = min(2 * (2 ** attempt), 30) + random.uniform(0, 2)
                     time.sleep(wait)
                     continue
                 if attempt == self._retry_max - 1:
                     raise
-                wait = (attempt + 1) * 5 + random.uniform(0, 3)
+                wait = min(2 * (2 ** attempt), 30) + random.uniform(0, 2)
                 time.sleep(wait)
                 continue
 

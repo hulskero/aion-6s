@@ -1,6 +1,9 @@
+import logging
 import shutil
 import urllib.parse
 import subprocess as sp
+
+LOGGER = logging.getLogger(__name__)
 
 
 HELP_TEXT = """\
@@ -27,7 +30,7 @@ def _via_url(name, inp=""):
     try:
         sp.run(["open", url], capture_output=True, timeout=5)
     except Exception:
-        pass
+        LOGGER.debug("shortcuts open failed")
     return {"text": f"Opened '{name}' via Shortcuts app (fire-and-forget, no output capture)"}
 
 

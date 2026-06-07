@@ -13,6 +13,7 @@ except ImportError:
     fcntl = None
 
 import itertools
+import logging
 import threading
 
 # Shrink thread stack from default 512KB → 128KB (saves ~75% per thread)
@@ -59,6 +60,8 @@ MODES = {
     "auto": "Full autonomous. Everything executes, guardrails still block nukes.",
 }
 
+LOGGER = logging.getLogger(__name__)
+
 AUDIT_LOG = os.path.join(os.path.dirname(__file__), "aion-audit.log")
 
 
@@ -90,36 +93,44 @@ def _obfuscate_secrets(text):
 MAX_AUDIT_BYTES = 1_048_576  # 1 MB
 _AUDIT_BUFFER = []
 _AUDIT_FLUSH_INTERVAL = 5
+_audit_lock = threading.Lock()
+_audit_log_size = None
 
 
 def _rotate_audit_log():
-    """Truncate audit log to last 1000 lines if >1MB. Checks every 10 writes."""
+    global _audit_log_size
     try:
-        if os.path.getsize(AUDIT_LOG) > MAX_AUDIT_BYTES:
+        if _audit_log_size is None:
+            _audit_log_size = os.path.getsize(AUDIT_LOG)
+        if _audit_log_size > MAX_AUDIT_BYTES:
             with open(AUDIT_LOG) as f:
                 lines = f.readlines()
             with open(AUDIT_LOG, "w") as f:
                 f.writelines(lines[-1000:])
+            _audit_log_size = 0
     except Exception:
-        pass
+        LOGGER.debug("audit log rotate failed")
 
 
 def _flush_audit_buffer():
-    if not _AUDIT_BUFFER:
-        return
-    try:
-        with open(AUDIT_LOG, "a") as f:
-            if fcntl:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                for entry in _AUDIT_BUFFER:
-                    f.write(json.dumps(entry) + "\n")
-            finally:
+    global _audit_log_size
+    with _audit_lock:
+        if not _AUDIT_BUFFER:
+            return
+        try:
+            with open(AUDIT_LOG, "a") as f:
                 if fcntl:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        _AUDIT_BUFFER.clear()
-    except Exception:
-        pass
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    for entry in _AUDIT_BUFFER:
+                        f.write(json.dumps(entry) + "\n")
+                finally:
+                    if fcntl:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            _AUDIT_BUFFER.clear()
+            _audit_log_size = None
+        except Exception:
+            LOGGER.warning("audit buffer flush failed")
 
 
 def audit_log(entry):
@@ -131,16 +142,20 @@ def audit_log(entry):
                 obfuscated[k] = _obfuscate_secrets(v)
             else:
                 obfuscated[k] = v
-        _AUDIT_BUFFER.append(obfuscated)
-        if len(_AUDIT_BUFFER) >= _AUDIT_FLUSH_INTERVAL:
+        with _audit_lock:
+            _AUDIT_BUFFER.append(obfuscated)
+            buffer_len = len(_AUDIT_BUFFER)
+        if buffer_len >= _AUDIT_FLUSH_INTERVAL:
             _flush_audit_buffer()
     except Exception:
-        pass
+        LOGGER.debug("audit_log entry failed")
 
 
 SESSION_DIR = os.path.join(os.path.dirname(__file__), "sessions")
 
 PIXEL_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋⠙⠹⠸⠼⠳⠦⠧⠇⠏"
+
+_AI_ACTION_RE = re.compile(r'@(cmd|plugin|shortcut)\s+(.+)', re.MULTILINE)
 
 
 class AION:
@@ -260,7 +275,7 @@ class AION:
                         config = json.load(f)
                     config = self._validate_config(config)
                     key = config.get("api_key", "")
-                    if not key or len(key) < 40 or key == "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":
+                    if not key or len(key) < 40 or key == "nvapi-REPLACE-WITH-YOUR-KEY":
                         config["api_key"] = self._prompt_api_key()
                         self._save_config(config)
                     return config
@@ -338,7 +353,7 @@ class AION:
             from plugins.ios_system import keep_awake
             keep_awake(True)
         except Exception:
-            pass
+            LOGGER.debug("keep_awake not available")
         self.system_prompt = self._build_prompt()
         self.memory.set_system(self.system_prompt)
 
@@ -520,7 +535,7 @@ RULES:
             return []
 
         results = []
-        for match in re.finditer(r'@(cmd|plugin|shortcut)\s+(.+)', text, re.MULTILINE):
+        for match in _AI_ACTION_RE.finditer(text):
             kind = match.group(1)
             rest = match.group(2).strip().strip('"').strip("'")
             result = {"kind": kind, "input": rest, "stdout": "", "success": False}
@@ -607,7 +622,7 @@ RULES:
                     try:
                         _su.copy2(dest, bak)
                     except Exception:
-                        pass
+                        LOGGER.debug("failed to backup %s", dest)
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with open(dest, "w") as f:
                     f.write(content)
@@ -751,7 +766,7 @@ RULES:
                         ts = time.strftime("%H:%M:%S", time.localtime(e["t"]))
                         cl("SYS", f"  {ts} {e.get('action','?'):>8} | {e.get('cmd','')[:50]}")
                     except Exception:
-                        pass
+                        LOGGER.debug("failed to parse audit log line")
             else:
                 cl("SYS", "No audit log yet.")
 
@@ -809,7 +824,7 @@ RULES:
                 fifo = "/tmp/aion.event"
                 self._ensure_fifo(fifo)
                 cl("SYS", f"Event listener on {fifo} — Ctrl+C to stop")
-                self._listen_events(fifo)
+                self._listen_events()
             elif subcmd == "once":
                 fifo = "/tmp/aion.event"
                 self._ensure_fifo(fifo)
@@ -1033,7 +1048,7 @@ RULES:
         t.start()
 
         color = ANSI["GRY"] if gray else ANSI[label]
-        text = ""
+        tokens = []
         try:
             for token in self.bridge.stream(self.memory.get_context()):
                 if not stop.is_set():
@@ -1042,7 +1057,7 @@ RULES:
                     sys.stdout.write(f"\r\033[K{color}{label}>{ANSI['RST']} ")
                 sys.stdout.write(f"{color}{token}{ANSI['RST']}")
                 sys.stdout.flush()
-                text += token
+                tokens.append(token)
         except Exception as e:
             if not stop.is_set():
                 stop.set()
@@ -1053,7 +1068,7 @@ RULES:
             if not stop.is_set():
                 stop.set()
                 t.join(timeout=2)
-        return text
+        return ''.join(tokens)
 
     def _show_stats(self, prompt_chars, completion_chars):
         usage = self.bridge.get_usage()
@@ -1087,8 +1102,33 @@ RULES:
             if status == 0:
                 return notifier, check, token
         except Exception:
-            pass
+            LOGGER.debug("notify setup failed")
         return None, None, None
+
+    def _ensure_fifo(self, path):
+        """Create a named pipe (FIFO) for event-driven commands."""
+        try:
+            if not os.path.exists(path):
+                os.mkfifo(path)
+        except OSError:
+            pass  # already exists or cannot create
+
+    def _read_event(self, path, timeout=30):
+        """Block-read a line from a named pipe with timeout."""
+        import select
+        import threading
+        self._ensure_fifo(path)
+        result = [None]
+        def reader():
+            try:
+                with open(path) as f:
+                    result[0] = f.readline().strip()
+            except Exception:
+                LOGGER.debug("event pipe read failed")
+        t = threading.Thread(target=reader, daemon=True)
+        t.start()
+        t.join(timeout)
+        return result[0] if result[0] else None
 
     def _read_event_file(self):
         path = "/tmp/aion.state"
@@ -1099,7 +1139,7 @@ RULES:
                 if data:
                     return data
         except Exception:
-            pass
+            LOGGER.debug("event file read failed")
         return None
 
     def _handle_event(self, raw):
@@ -1111,7 +1151,7 @@ RULES:
             try:
                 trigger_result = self.plugins["triggers"]["run"](f"process {raw}")
             except Exception:
-                pass
+                LOGGER.debug("trigger run failed")
 
         if trigger_result == "ai" or trigger_result == "":
             handlers = {
@@ -1143,7 +1183,7 @@ RULES:
             cl("GRY", f"  Trigger handled: {trigger_result}")
             audit_log({"t": time.time(), "action": "trigger", "event": raw, "result": trigger_result})
 
-    def _listen_events(self, path):
+    def _listen_events(self):
         import ctypes
         notify_post, notify_check, notify_token = self._setup_notify()
         state_file = "/tmp/aion.state"
@@ -1263,9 +1303,9 @@ if __name__ == "__main__":
                 _sp.run(["jetsamctl", "-l", "512", "aion"], capture_output=True, timeout=5)
                 _sp.run(["jetsamctl", "-p", "16", "aion"], capture_output=True, timeout=5)
             except Exception:
-                pass
+                LOGGER.debug("jetsamctl tuning failed")
             cl("SYS", "Daemon mode — jetsam priority 16, limit 512MB")
         cl("SYS", "Listening for system events (Ctrl+C to stop)")
-        app._listen_events("/tmp/aion.state")
+        app._listen_events()
     else:
         AION().run()

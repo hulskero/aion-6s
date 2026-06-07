@@ -44,6 +44,13 @@ BLOCKED = [
     (r':\(\)\s*\{', "fork bomb"),
     (r'\[.*\]\s*-\s*\[.*\]\s*&\s*while\s+true', "another fork bomb variant"),
 
+    # Python3 code-execution bypasses (python3 is in SAFE_COMMANDS but -c/-m/heredoc allow arbitrary execution)
+    (r'\bpython3\s+-c\b', "python3 -c inline code execution"),
+    (r'\bpython3\s+-m\b', "python3 -m module execution"),
+    (r'\bpython3\s+--eval\b', "python3 --eval inline execution"),
+    (r'\bpython3\s+-W\b', "python3 -W (can chain with -c)"),
+    (r'\bpython3\s*<<', "python3 heredoc execution"),
+
     # Remote code execution patterns
     (r'(curl|wget|fetch)\s+.*\|\s*(?:sh|bash|zsh|python|python3|perl|ruby|ash|dash)', "pipe download to shell"),
     (r'(curl|wget|fetch)\s+.*-O\s+.*\&\&.*\s*(?:sh|bash|zsh|python|python3|perl|ruby|ash|dash)', "download and execute"),
@@ -161,6 +168,7 @@ _proactive_yes = False
 # Pre-compiled regex patterns (avoids re-compilation on every check())
 _BLOCKED_RE = [(re.compile(p, re.IGNORECASE), r) for p, r in BLOCKED]
 _DESTRUCTIVE_RE = [re.compile(p, re.IGNORECASE) for p in DESTRUCTIVE]
+_AI_CMD_RE = re.compile(r'@cmd\s+(.+)')
 
 
 def check(cmd):
@@ -178,7 +186,7 @@ def check(cmd):
 def check_ai_response(text):
     """Pre-check AI response for dangerous commands before execution"""
     dangerous_keywords = ["rm -rf", "dd if=", ":(){", "mkfs.", "reboot", "poweroff", "halt"]
-    for match in re.finditer(r'@cmd\s+(.+)', text):
+    for match in _AI_CMD_RE.finditer(text):
         cmd = match.group(1).strip()
         for kw in dangerous_keywords:
             if kw in cmd.lower():

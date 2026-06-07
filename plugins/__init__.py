@@ -65,11 +65,18 @@ def install_plugin(name, url, plugins_dir):
     import urllib.request
     import urllib.error
 
-    if not name.endswith(".py"):
-        name += ".py"
-    dest = os.path.join(plugins_dir, name)
+    # Sanitize: strip directory traversal, enforce .py extension
+    safe_name = os.path.basename(name)
+    if not safe_name.endswith(".py"):
+        safe_name += ".py"
+    dest = os.path.join(plugins_dir, safe_name)
+    # Path traversal check: resolved dest must stay inside plugins_dir
+    real_dest = os.path.realpath(dest)
+    real_plugins = os.path.realpath(plugins_dir)
+    if not real_dest.startswith(real_plugins + os.sep) and real_dest != real_plugins:
+        return None, f"Invalid plugin name: '{name}'"
     if os.path.exists(dest):
-        return None, f"Plugin '{name}' already exists."
+        return None, f"Plugin '{safe_name}' already exists."
     try:
         urllib.request.urlretrieve(url, dest)
     except urllib.error.URLError as e:

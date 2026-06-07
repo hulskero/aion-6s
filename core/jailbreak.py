@@ -1,4 +1,4 @@
-import subprocess
+import logging
 import os
 import re as _re
 import glob as globmod
@@ -6,6 +6,8 @@ import urllib.parse
 import threading
 
 from core.input_validator import safe_shell_split
+
+LOGGER = logging.getLogger(__name__)
 
 # Simple shell tokenizer for iOS commands
 # Maps common commands to safe handlers
@@ -119,20 +121,28 @@ def _tokenize(cmd):
 
 # Module-level cached Jailbreak instance for plugins
 _SYSTEM_JB = None
+_SYSTEM_WORKSPACE = None
 _JB_LOCK = threading.Lock()
 
 
-def safe_exec(cmd, timeout=30, jb=None):
+def safe_exec(cmd, timeout=30, jb=None, workspace=None):
     """Central safe execution for plugins. Same security as Jailbreak.run().
     Use this instead of raw subprocess.run() in plugin code.
-    Pass jb=<Jailbreak instance> to use the main instance (with workspace)."""
-    global _SYSTEM_JB
+    Pass jb=<Jailbreak instance> to use the main instance (with workspace).
+    Pass workspace=<path> to seed the sandbox working directory for the system instance."""
+    global _SYSTEM_JB, _SYSTEM_WORKSPACE
     if jb is not None:
         return jb.run(cmd, timeout=timeout)
+    # Track workspace so the system instance is always seeded correctly
+    if workspace is not None:
+        _SYSTEM_WORKSPACE = workspace
     if _SYSTEM_JB is None:
         with _JB_LOCK:
             if _SYSTEM_JB is None:
-                _SYSTEM_JB = Jailbreak(timeout=timeout)
+                # Auto-detect workspace from cwd if not already set
+                if _SYSTEM_WORKSPACE is None:
+                    _SYSTEM_WORKSPACE = os.getcwd()
+                _SYSTEM_JB = Jailbreak(workspace=_SYSTEM_WORKSPACE, timeout=timeout)
     return _SYSTEM_JB.run(cmd)
 
 
@@ -172,13 +182,14 @@ class Jailbreak:
                 break
             inner = m.group(1)
             r = safe_exec(inner.strip(), timeout=15)
-            replacement = r["stdout"].strip() if r["success"] else ""
+            replacement = _expand_subshells(r["stdout"].strip(), _depth + 1) if r["success"] else ""
             cmd = cmd[:m.start()] + replacement + cmd[m.end():]
         return cmd
 
     def run(self, cmd, timeout=None):
         """Execute command safely. Handles pipes, globs, subshells, always uses argv (shell=False).
         Default timeout from config, overridable per-call."""
+        import subprocess
         if timeout is None:
             timeout = self.timeout
         cmd = self._expand_subshells(cmd)
@@ -189,7 +200,7 @@ class Jailbreak:
         argv = _tokenize(cmd)
         if argv is None:
             cmd_name = cmd.strip().split()[0] if cmd.strip() else "?"
-            return {"success": False, "stdout": "", "stderr": f"Command not allowed: '{cmd_name}'. Check SAFE_COMMANDS or use @plugin.", "code": -1}
+            return {"success": False, "stdout": "", "stderr": f"Command not allowed: '{cmd_name}'. Check SAFE_COMMANDS or use @plugin.", "exit_code": -1}
         argv = _expand_glob_args(argv)
         try:
             result = subprocess.run(
@@ -200,23 +211,24 @@ class Jailbreak:
                 "success": result.returncode == 0,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
-                "code": result.returncode,
+                "exit_code": result.returncode,
             }
         except subprocess.TimeoutExpired:
-            return {"success": False, "stdout": "", "stderr": "TIMEOUT", "code": -1}
+            return {"success": False, "stdout": "", "stderr": "TIMEOUT", "exit_code": -1}
         except FileNotFoundError:
-            return {"success": False, "stdout": "", "stderr": f"Command not found: {argv[0] if argv else 'unknown'}", "code": 127}
+            return {"success": False, "stdout": "", "stderr": f"Command not found: {argv[0] if argv else 'unknown'}", "exit_code": 127}
         except Exception as e:
-            return {"success": False, "stdout": "", "stderr": str(e)[:500], "code": -1}
+            return {"success": False, "stdout": "", "stderr": str(e)[:500], "exit_code": -1}
 
     def _run_pipeline(self, segments, timeout):
         """Run a pipeline of commands connected by pipes. No shell=True needed."""
+        import subprocess
         tokenized = []
         for seg in segments:
             argv = _tokenize(seg)
             if argv is None:
                 cmd_name = seg.strip().split()[0] if seg.strip() else "?"
-                return {"success": False, "stdout": "", "stderr": f"Command not allowed in pipeline: '{cmd_name}'", "code": -1}
+                return {"success": False, "stdout": "", "stderr": f"Command not allowed in pipeline: '{cmd_name}'", "exit_code": -1}
             argv = _expand_glob_args(argv)
             tokenized.append(argv)
 
@@ -244,16 +256,16 @@ class Jailbreak:
                 "success": rc == 0,
                 "stdout": stdout.decode("utf-8", errors="replace") if stdout else "",
                 "stderr": stderr.decode("utf-8", errors="replace") if stderr else "",
-                "code": rc,
+                "exit_code": rc,
             }
         except subprocess.TimeoutExpired:
             for p in procs:
                 p.kill()
             for p in procs:
                 p.wait()
-            return {"success": False, "stdout": "", "stderr": "TIMEOUT", "code": -1}
+            return {"success": False, "stdout": "", "stderr": "TIMEOUT", "exit_code": -1}
         except Exception as e:
-            return {"success": False, "stdout": "", "stderr": str(e)[:500], "code": -1}
+            return {"success": False, "stdout": "", "stderr": str(e)[:500], "exit_code": -1}
         finally:
             for p in procs:
                 if p.returncode is None:
@@ -261,7 +273,7 @@ class Jailbreak:
                         p.kill()
                         p.wait(timeout=5)
                     except Exception:
-                        pass
+                        LOGGER.debug("failed to kill timed-out process")
 
     def run_shortcut(self, action, name=None, input_data=None):
         if action == "list":
@@ -273,7 +285,7 @@ class Jailbreak:
             return self.run(f"open '{scheme}'")
         # run
         if not name:
-            return {"success": False, "stdout": "", "stderr": "No shortcut name", "code": -1}
+            return {"success": False, "stdout": "", "stderr": "No shortcut name", "exit_code": -1}
         scheme = f"shortcuts://run-shortcut?name={urllib.parse.quote(name)}"
         if input_data:
             scheme += f"&input={urllib.parse.quote(input_data)}"
@@ -282,12 +294,12 @@ class Jailbreak:
     def activator_send(self, action):
         if self.mode == "newterm":
             return self.run(f"activator send {action}")
-        return {"success": False, "stdout": "", "stderr": "No activator (a-Shell)", "code": -1}
+        return {"success": False, "stdout": "", "stderr": "No activator (a-Shell)", "exit_code": -1}
 
     def remote_companion(self, cmd):
         if self.mode == "newterm":
             return self.run(f"rc {cmd}")
-        return {"success": False, "stdout": "", "stderr": "No RemoteCompanion", "code": -1}
+        return {"success": False, "stdout": "", "stderr": "No RemoteCompanion", "exit_code": -1}
 
     def info(self):
         uname = self.run("uname -a")

@@ -1,7 +1,10 @@
+import logging
 import re
 import shutil
 from core.jailbreak import safe_exec
 from core.ios_hw import ioreg_get_first
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _ifconfig_cell():
@@ -31,7 +34,7 @@ def _plist_carrier():
         if carrier:
             return str(carrier)
     except Exception:
-        pass
+        LOGGER.debug("commcenter plist read failed")
     try:
         import plistlib, glob
         bundles = glob.glob('/System/Library/Carrier Bundles/*/carrier.plist')
@@ -42,7 +45,7 @@ def _plist_carrier():
             if name:
                 return str(name)
     except Exception:
-        pass
+        LOGGER.debug("carrier bundles read failed")
     return None
 
 
@@ -99,7 +102,7 @@ def _ioreg_cellular_shell():
             if sig:
                 data["signal"] = sig
         except Exception:
-            pass
+            LOGGER.debug("ioreg cellular shell failed")
     return data if data else None
 
 

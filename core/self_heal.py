@@ -1,7 +1,12 @@
 import hashlib
 import json
+import logging
 import os
 import re
+
+LOGGER = logging.getLogger(__name__)
+
+_MAX_HEAL_HISTORY = 200
 
 
 SENSITIVE_PATTERNS = [
@@ -40,7 +45,7 @@ class SelfHeal:
                 with open(self._cache_path) as f:
                     return json.load(f)
         except Exception:
-            pass
+            LOGGER.debug("heal cache load failed")
         return {}
 
     def _save_cache(self):
@@ -53,12 +58,14 @@ class SelfHeal:
                 json.dump(self._cache, f, indent=2)
             os.replace(tmp, self._cache_path)
         except Exception:
-            pass
+            LOGGER.warning("heal cache save failed")
 
     def heal(self, cmd, stderr):
         cmd_s = sanitize(cmd)
         err_s = sanitize(stderr)
         self.history.append({"cmd": cmd_s, "error": err_s})
+        if len(self.history) > _MAX_HEAL_HISTORY:
+            self.history = self.history[-_MAX_HEAL_HISTORY:]
 
         for absent in IOS_ABSENT:
             if absent in cmd_s and "not found" in err_s.lower():

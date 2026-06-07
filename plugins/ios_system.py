@@ -1,9 +1,12 @@
+import logging
 import os
 import re
 import time
 import ctypes
 import shutil
 from core.jailbreak import safe_exec
+
+LOGGER = logging.getLogger(__name__)
 
 _OBJC = None
 _TTS_READY = None
@@ -273,7 +276,7 @@ def _ifconfig_pdp():
             ip_m = re.search(r'inet\s+(\S+)', r["stdout"])
             return {"ip": ip_m.group(1) if ip_m else "?"}
     except Exception:
-        pass
+        LOGGER.debug("ifconfig pdp_ip0 failed")
     return {}
 
 
@@ -320,7 +323,7 @@ def _wifi_basic():
             data["status"] = m.group(1) if m else "?"
             return data
     except Exception:
-        pass
+        LOGGER.debug("ifconfig en0 failed")
     return {}
 
 
