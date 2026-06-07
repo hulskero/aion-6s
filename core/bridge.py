@@ -52,8 +52,11 @@ class Bridge:
         self.request_timeout = config.get("request_timeout", self.DEFAULTS["request_timeout"])
         self.rate_limit = config.get("rate_limit", self.DEFAULTS["rate_limit"])
         self._network_ok = False
+        self._call_timestamps.clear()
 
     def _enforce_rate_limit(self):
+        if self.rate_limit <= 0:
+            return
         now = time.time()
         cutoff = now - 60
         d = self._call_timestamps
@@ -69,7 +72,7 @@ class Bridge:
         if self._network_ok:
             return
         host = urllib.parse.urlparse(self.base_url).hostname
-        port = 443
+        port = urllib.parse.urlparse(self.base_url).port or 443
         for attempt in range(max_retries):
             try:
                 sock = socket.create_connection((host, port), timeout=10)
@@ -144,10 +147,6 @@ class Bridge:
             else:
                 hint = ""
             raise APIError(f"Network: {reason}{hint}")
-        except socket.timeout:
-            raise APIError("Socket timed out — check your network connection")
-        except (ConnectionResetError, http.client.RemoteDisconnected) as e:
-            raise APIError(f"Connection lost: {e}")
 
     def _retry_post(self, messages, stream=False):
         self._enforce_rate_limit()
@@ -186,55 +185,60 @@ class Bridge:
         t0 = time.time()
         response = self._retry_post(messages, stream=False)
         try:
-            raw = response.read()
-            data = json.loads(raw)
-        except (socket.timeout, ConnectionResetError, json.JSONDecodeError) as e:
-            raise APIError(f"Chat response read failed: {e}")
-        self._last_latency = time.time() - t0
-        if not isinstance(data, dict):
-            raise APIError("Empty or non-dict API response")
-        self._last_usage = data.get("usage")
-        choices = data.get("choices")
-        if not choices or not isinstance(choices, list) or len(choices) == 0:
-            raise APIError("API response missing choices")
-        content = choices[0].get("message", {}).get("content")
-        if content is None:
-            raise APIError("API response missing content")
-        self._allow_sleep()
-        return content
+            try:
+                raw = response.read()
+                data = json.loads(raw)
+            except (socket.timeout, ConnectionResetError, http.client.IncompleteRead,
+                    ConnectionAbortedError, BrokenPipeError, OSError, json.JSONDecodeError) as e:
+                raise APIError(f"Chat response read failed: {e}")
+            self._last_latency = time.time() - t0
+            if not isinstance(data, dict):
+                raise APIError("Empty or non-dict API response")
+            self._last_usage = data.get("usage")
+            choices = data.get("choices")
+            if not choices or not isinstance(choices, list) or len(choices) == 0:
+                raise APIError("API response missing choices")
+            content = choices[0].get("message", {}).get("content")
+            if content is None:
+                raise APIError("API response missing content")
+            return content
+        finally:
+            self._allow_sleep()
 
     def stream(self, messages):
         t0 = time.time()
         response = self._retry_post(messages, stream=True)
         self._last_usage = None
-        for retry in range(2):
-            try:
-                for line_bytes in response:
-                    line = line_bytes.decode("utf-8").strip()
-                    if not line:
-                        continue
-                    if line == "data: [DONE]":
-                        break
-                    if line.startswith("data: "):
-                        try:
-                            chunk = json.loads(line[6:])
-                            if "usage" in chunk:
-                                self._last_usage = chunk["usage"]
-                            delta = chunk["choices"][0]["delta"]
-                            content = delta.get("content")
-                            if content is not None:
-                                yield content
-                        except (json.JSONDecodeError, KeyError, IndexError):
-                            pass
-                break
-            except (socket.timeout, urllib.error.URLError, ConnectionResetError,
-                    http.client.RemoteDisconnected) as e:
-                self._allow_sleep()
-                if retry == 1:
-                    raise APIError(f"Stream interrupted after retry: {e}")
-                response = self._retry_post(messages, stream=True)
-        self._allow_sleep()
-        self._last_latency = time.time() - t0
+        try:
+            for retry in range(2):
+                try:
+                    for line_bytes in response:
+                        line = line_bytes.decode("utf-8").strip()
+                        if not line:
+                            continue
+                        if line == "data: [DONE]":
+                            break
+                        if line.startswith("data: "):
+                            try:
+                                chunk = json.loads(line[6:])
+                                if "usage" in chunk:
+                                    self._last_usage = chunk["usage"]
+                                delta = chunk["choices"][0]["delta"]
+                                content = delta.get("content")
+                                if content is not None:
+                                    yield content
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                pass
+                    break
+                except (socket.timeout, urllib.error.URLError, ConnectionResetError,
+                        http.client.RemoteDisconnected) as e:
+                    response.close()
+                    if retry == 1:
+                        raise APIError(f"Stream interrupted after retry: {e}")
+                    response = self._retry_post(messages, stream=True)
+        finally:
+            self._allow_sleep()
+            self._last_latency = time.time() - t0
 
     def _keep_awake(self):
         if hasattr(self, "_assertion_id") and self._assertion_id is not None:
@@ -276,4 +280,4 @@ class Bridge:
         self._assertion_id = None
 
     def get_usage(self):
-        return getattr(self, "_last_usage", None)
+        return self._last_usage

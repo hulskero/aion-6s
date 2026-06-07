@@ -210,8 +210,19 @@ class AION:
             url = config["base_url"]
             if not isinstance(url, str) or not url.startswith("https://"):
                 config["base_url"] = "https://integrate.api.nvidia.com/v1"
-            elif "integrate.api.nvidia.com" not in url and "api.anthropic.com" not in url:
+            elif "integrate.api.nvidia.com" not in url and not url.startswith("https://api.anthropic.com/"):
                 cl("WARN", f"  [SECURITY] Unusual base_url: {url[:50]}")
+
+        # Ensure all keys exist
+        config.setdefault("api_key", "")
+        config.setdefault("model", "deepseek-ai/deepseek-v4-flash")
+        config.setdefault("base_url", "https://integrate.api.nvidia.com/v1")
+        config.setdefault("jailbreak_mode", "auto")
+        config.setdefault("temperature", 0.7)
+        if "request_timeout" not in config:
+            config["request_timeout"] = 200
+        if "rate_limit" not in config:
+            config["rate_limit"] = 30
 
         return config
 
@@ -307,7 +318,7 @@ class AION:
         self.jailbreak = Jailbreak(
             self.config.get("jailbreak_mode", "auto"),
             workspace=self.workspace,
-            timeout=self.config.get("request_timeout", 30),
+            timeout=self.config.get("request_timeout", 200),
         )
         self.memory = MemoryManager(self.config.get("max_context_pairs", 5))
         self.healer = SelfHeal(self.bridge, self.config.get("max_heal_attempts", 3))
@@ -384,7 +395,7 @@ RULES:
         if self.mode == "plan":
             c("GRY", f"  [plan] $ {cmd}")
             print()
-            return None
+            return {"success": True, "stdout": "", "stderr": "", "exit_code": 0}
 
         if self.mode in ("chat", "build") and is_dest:
             cl("WARN", f"  [DANGEROUS] $ {cmd}")
@@ -443,6 +454,10 @@ RULES:
         return result
 
     def _exec_plugin(self, name, args=""):
+        if self.mode == "plan":
+            c("GRY", f"  [plan] @plugin {name} {args}")
+            print()
+            return {"success": False, "output": ""}
         if name not in self.plugins:
             c("ERR", f"  ✗ @plugin {name} {args} — not found")
             msg = f"Plugin '{name}' not found. Available: {list(self.plugins.keys())}"
@@ -465,6 +480,10 @@ RULES:
             return {"success": False, "output": msg}
 
     def _exec_shortcut(self, text):
+        if self.mode == "plan":
+            c("GRY", f"  [plan] @shortcut {text}")
+            print()
+            return {"success": False, "stdout": "", "stderr": "", "code": -1}
         from core.input_validator import safe_shell_split
         parts = safe_shell_split(text)
         if not parts:
@@ -610,7 +629,7 @@ RULES:
                 dest = os.path.join(base_dir, rel)
                 bak = dest + ".bak"
                 try:
-                    if f.endswith(".py"):
+                    if rel.endswith(".py"):
                         with open(full) as _sf:
                             compile(_sf.read(), rel, "exec")
                     if os.path.exists(dest) and not os.path.exists(bak):
