@@ -6,7 +6,6 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import socket
-import ssl
 import http.client
 from collections import deque
 
@@ -19,12 +18,12 @@ class Bridge:
     __slots__ = [
         "api_key", "base_url", "model", "max_tokens", "temperature",
         "request_timeout", "rate_limit", "_retry_max", "_last_latency",
-        "_last_usage", "_call_timestamps",
+        "_last_usage", "_call_timestamps", "_network_ok", "_assertion_id",
     ]
 
     DEFAULTS = {
         "max_tokens": 256,
-        "request_timeout": 90,
+        "request_timeout": 200,
         "rate_limit": 30,
         "temperature": 0.1,
     }
@@ -41,6 +40,8 @@ class Bridge:
         self._last_latency = 0
         self._last_usage = None
         self._call_timestamps = deque()
+        self._network_ok = False
+        self._assertion_id = None
 
     def update_config(self, config):
         self.api_key = config.get("api_key") or os.environ.get("NVIDIA_API_KEY", "")
@@ -50,6 +51,7 @@ class Bridge:
         self.temperature = config.get("temperature", self.DEFAULTS["temperature"])
         self.request_timeout = config.get("request_timeout", self.DEFAULTS["request_timeout"])
         self.rate_limit = config.get("rate_limit", self.DEFAULTS["rate_limit"])
+        self._network_ok = False
 
     def _enforce_rate_limit(self):
         now = time.time()
@@ -62,35 +64,40 @@ class Bridge:
             wait = 60 - (now - oldest)
             if wait > 0:
                 time.sleep(wait)
-        d.append(now)
 
     def _wait_for_network(self, max_retries=3):
+        if self._network_ok:
+            return
         host = urllib.parse.urlparse(self.base_url).hostname
         port = 443
         for attempt in range(max_retries):
             try:
                 sock = socket.create_connection((host, port), timeout=10)
                 sock.close()
+                self._network_ok = True
                 return
             except (socket.timeout, OSError):
+                self._network_ok = False
                 if attempt == max_retries - 1:
-                    raise APIError(f"Network unreachable: {host}:{port}")
+                    raise APIError(f"Network timed out: {host}:{port}")
                 time.sleep(5 + random.uniform(0, 3))
 
     def _build_opener(self):
         return urllib.request.build_opener()
 
     def _post(self, messages, stream=False):
-        self._wait_for_network()
         if not self.api_key:
             raise APIError(
                 "No API key.\n"
                 "  Set NVIDIA_API_KEY env var, or add \"api_key\" to config.json.\n"
                 "  Get one at https://build.nvidia.com/deepseek-ai/deepseek-v4-flash"
             )
+        self._keep_awake()
+        self._wait_for_network()
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Connection": "close",
+            "User-Agent": "AION-6S/1.0",
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
@@ -146,7 +153,9 @@ class Bridge:
         self._enforce_rate_limit()
         for attempt in range(self._retry_max):
             try:
-                return self._post(messages, stream)
+                result = self._post(messages, stream)
+                self._call_timestamps.append(time.time())
+                return result
             except APIError as e:
                 estr = str(e)
                 if "401" in estr or "403" in estr or "Invalid API key" in estr:
@@ -161,7 +170,7 @@ class Bridge:
                     wait = (attempt + 1) * 10 + random.uniform(0, 5)
                     time.sleep(wait)
                     continue
-                if "timed out" in estr.lower():
+                if "timed out" in estr.lower() or "unreachable" in estr.lower():
                     if attempt == self._retry_max - 1:
                         raise
                     wait = (attempt + 1) * 15 + random.uniform(0, 10)
@@ -182,8 +191,17 @@ class Bridge:
         except (socket.timeout, ConnectionResetError, json.JSONDecodeError) as e:
             raise APIError(f"Chat response read failed: {e}")
         self._last_latency = time.time() - t0
+        if not isinstance(data, dict):
+            raise APIError("Empty or non-dict API response")
         self._last_usage = data.get("usage")
-        return data["choices"][0]["message"]["content"]
+        choices = data.get("choices")
+        if not choices or not isinstance(choices, list) or len(choices) == 0:
+            raise APIError("API response missing choices")
+        content = choices[0].get("message", {}).get("content")
+        if content is None:
+            raise APIError("API response missing content")
+        self._allow_sleep()
+        return content
 
     def stream(self, messages):
         t0 = time.time()
@@ -211,10 +229,51 @@ class Bridge:
                 break
             except (socket.timeout, urllib.error.URLError, ConnectionResetError,
                     http.client.RemoteDisconnected) as e:
+                self._allow_sleep()
                 if retry == 1:
                     raise APIError(f"Stream interrupted after retry: {e}")
                 response = self._retry_post(messages, stream=True)
+        self._allow_sleep()
         self._last_latency = time.time() - t0
+
+    def _keep_awake(self):
+        if hasattr(self, "_assertion_id") and self._assertion_id is not None:
+            return
+        self._assertion_id = None
+        try:
+            import ctypes
+            iokit = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/IOKit.framework/IOKit"
+            )
+            cf = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+            )
+            kIOPMAssertionType = cf.CFStringCreateWithCString(
+                None, b"PreventUserIdleSystemSleep", 0x08000100
+            )
+            name = cf.CFStringCreateWithCString(
+                None, b"AION-6S API Call", 0x08000100
+            )
+            assertion_id = ctypes.c_uint32(0)
+            iokit.IOPMAssertionCreateWithName(
+                kIOPMAssertionType, 255, name, ctypes.byref(assertion_id)
+            )
+            self._assertion_id = assertion_id.value
+        except Exception:
+            pass
+
+    def _allow_sleep(self):
+        if not hasattr(self, "_assertion_id") or self._assertion_id is None:
+            return
+        try:
+            import ctypes
+            iokit = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/IOKit.framework/IOKit"
+            )
+            iokit.IOPMAssertionRelease(ctypes.c_uint32(self._assertion_id))
+        except Exception:
+            pass
+        self._assertion_id = None
 
     def get_usage(self):
         return getattr(self, "_last_usage", None)

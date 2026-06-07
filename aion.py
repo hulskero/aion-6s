@@ -157,6 +157,18 @@ class AION:
 
     def _validate_config(self, config):
         """Validate and sanitize config values"""
+        if not isinstance(config, dict):
+            return {
+                "request_timeout": 200,
+                "max_context_pairs": 5,
+                "max_tokens": 512,
+                "max_heal_attempts": 3,
+                "temperature": 0.7,
+                "rate_limit": 30,
+                "jailbreak_mode": "auto",
+                "base_url": "https://integrate.api.nvidia.com/v1",
+                "model": "deepseek-ai/deepseek-v4-flash",
+            }
         # Type checking and bounds
         if not isinstance(config.get("max_context_pairs"), int) or config["max_context_pairs"] < 1:
             config["max_context_pairs"] = 5
@@ -181,11 +193,11 @@ class AION:
         if config.get("jailbreak_mode") not in ("auto", "newterm", "ashell"):
             config["jailbreak_mode"] = "auto"
 
-        tout = config.get("request_timeout", 90)
+        tout = config.get("request_timeout", 200)
         if not isinstance(tout, (int, float)) or tout < 15:
-            config["request_timeout"] = 90
-        if tout > 180:
-            config["request_timeout"] = 180
+            config["request_timeout"] = 200
+        elif tout > 200:
+            config["request_timeout"] = 200
 
         rl = config.get("rate_limit", 30)
         if not isinstance(rl, int) or rl < 1:
@@ -213,7 +225,7 @@ class AION:
             "max_heal_attempts": 3,
             "temperature": 0.7,
             "max_tokens": 512,
-            "request_timeout": 90,
+            "request_timeout": 200,
             "rate_limit": 30
         }
 
@@ -591,7 +603,7 @@ RULES:
                         continue
                     full = os.path.join(root, f)
                     rel = os.path.relpath(full, tmp)
-                    if rel.startswith(".git") or rel.startswith("sessions") or rel.startswith("workspace"):
+                    if rel.startswith(".git") or rel.startswith("sessions") or rel.startswith("workspace") or rel.startswith("aion-6s/"):
                         continue
                     py_files.append((rel, full))
             for rel, full in py_files:
@@ -639,7 +651,7 @@ RULES:
                 return False
             for entry in py_entries:
                 rel = entry["path"]
-                if rel.startswith(".git") or rel.startswith("sessions") or rel.startswith("workspace"):
+                if rel.startswith(".git") or rel.startswith("sessions") or rel.startswith("workspace") or rel.startswith("aion-6s/"):
                     skipped.append(rel)
                     continue
                 result = _dl_file(rel)
@@ -880,10 +892,13 @@ RULES:
   !! / !N            Repeat last / Nth command
   /help              This message""")
         elif cmd == "/reload":
-            from plugins import reload_plugins
-            self.plugins = reload_plugins(os.path.join(os.path.dirname(__file__), "plugins"))
+            import sys
+            for mod in list(sys.modules.keys()):
+                if mod.startswith("core.") or mod == "core" or mod.startswith("plugins.") or mod == "plugins":
+                    del sys.modules[mod]
+            self._init_components()
             self.system_prompt = self._build_prompt()
-            cl("SYS", f"Plugins reloaded. {len(self.plugins)} active.")
+            cl("SYS", f"Core + plugins reloaded. {len(self.plugins)} active.")
 
         elif cmd.startswith("/update"):
             self._do_update(cmd.split(None, 1)[1] if len(cmd.split(None, 1)) > 1 else "")
