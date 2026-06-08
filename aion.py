@@ -393,7 +393,7 @@ TOOLS:
   @shortcut run <name> [input]  - run iOS Shortcut
   @shortcut create <name>       - create iOS Shortcut
   @shortcut list                - list iOS Shortcuts
-  @read <path>             - read file contents with line numbers
+  @read <path> [start [end]]  - read file contents (optional line range)
   @write <path>            - write content to file (put content after @write line)
   @edit <path>             - replace text in file (use OLD:/NEW: blocks)
   @grep <pattern>          - search for pattern in source files
@@ -520,12 +520,24 @@ RULES:
                 print(f"{ANSI['GRY']}  │{ANSI['RST']} {ANSI['ERR']}{line}{ANSI['RST']}")
 
     def _read_file(self, path):
+        parts = path.rsplit(None, 2)
+        path = parts[0]
+        offset = int(parts[1]) - 1 if len(parts) > 1 else 0
+        limit = int(parts[2]) if len(parts) > 2 else None
+        if offset < 0:
+            offset = 0
         try:
             with open(path) as f:
                 lines = f.readlines()
-            max_digits = len(str(len(lines)))
+            if offset >= len(lines):
+                return f"Start line {offset+1} beyond file length ({len(lines)})"
+            selected = lines[offset:]
+            if limit is not None:
+                selected = selected[:limit]
+            start_line = offset + 1
+            max_digits = len(str(start_line + len(selected)))
             numbered = "".join(
-                f"{i+1:>{max_digits}}|{line}" for i, line in enumerate(lines)
+                f"{i+start_line:>{max_digits}}|{line}" for i, line in enumerate(selected)
             )
             return numbered
         except FileNotFoundError:
@@ -537,6 +549,7 @@ RULES:
 
     def _write_file(self, path, content):
         try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
                 f.write(content)
             return f"Written {len(content)} bytes to {path}"
@@ -581,10 +594,13 @@ RULES:
     def _glob_search(self, pattern):
         import glob as globmod
         try:
-            matches = sorted(globmod.glob(pattern, recursive=True))
+            root = os.path.dirname(os.path.abspath(__file__))
+            full_pattern = pattern if pattern.startswith("/") else os.path.join(root, pattern)
+            matches = sorted(globmod.glob(full_pattern, recursive=True))
             if not matches:
                 return f"No files match: {pattern}"
-            return "\n".join(matches[:50])
+            rel_matches = [os.path.relpath(m, root) for m in matches]
+            return "\n".join(rel_matches[:50])
         except Exception as e:
             return f"Glob error: {e}"
 
@@ -650,7 +666,7 @@ RULES:
             content = match.group(2).strip()
             result = {"kind": "write", "input": path, "stdout": "", "success": False}
             result["stdout"] = self._write_file(path, content)
-            result["success"] = True
+            result["success"] = not result["stdout"].startswith("Error")
             results.append(result)
             audit_log({"t": time.time(), "action": "write", "path": path})
 
@@ -660,7 +676,7 @@ RULES:
             new = match.group(3)
             result = {"kind": "edit", "input": path, "stdout": "", "success": False}
             result["stdout"] = self._edit_file(path, old, new)
-            result["success"] = True
+            result["success"] = not result["stdout"].startswith(("String not found", "Error"))
             results.append(result)
             audit_log({"t": time.time(), "action": "edit", "path": path})
 
@@ -695,13 +711,15 @@ RULES:
                 })
             elif kind == "read":
                 out = self._read_file(rest)
-                results.append({"kind": "read", "input": rest, "stdout": out, "success": True})
+                success = not out.startswith(("File not found:", "Is a directory:", "Error reading", "Start line"))
+                results.append({"kind": "read", "input": rest, "stdout": out, "success": success})
             elif kind == "grep":
                 out = self._grep_search(rest)
-                results.append({"kind": "grep", "input": rest, "stdout": out, "success": True})
+                results.append({"kind": "grep", "input": rest, "stdout": out, "success": "No matches" not in out})
             elif kind == "glob":
                 out = self._glob_search(rest)
-                results.append({"kind": "glob", "input": rest, "stdout": out, "success": True})
+                success = not (out.startswith("No files match") or out.startswith("Glob error"))
+                results.append({"kind": "glob", "input": rest, "stdout": out, "success": success})
 
         return results
 
@@ -1102,7 +1120,13 @@ RULES:
   /log               Show last audit log entries
   /update            Download latest files from GitHub
   !! / !N            Repeat last / Nth command
-  /help              This message""")
+  /help              This message
+
+Direct tool commands:
+  @read <path> [start [end]]  Read file (bypasses AI)
+  @grep <pattern>            Search .py files for pattern
+  @glob <pattern>            Find files matching glob
+  !<command>                 Run shell command directly""")
         elif cmd == "/reload":
             import sys
             backup = {}
@@ -1439,6 +1463,31 @@ RULES:
                 self._print_output(r)
                 continue
 
+            if line.startswith("@read "):
+                path = line[len("@read "):].strip()
+                result = self._read_file(path)
+                if result.startswith(("File not found:", "Is a directory:", "Error reading", "Start line")):
+                    cl("ERR", result)
+                else:
+                    print(result)
+                continue
+            if line.startswith("@grep "):
+                pattern = line[len("@grep "):].strip()
+                result = self._grep_search(pattern)
+                if "No matches" in result:
+                    cl("GRY", result)
+                else:
+                    print(result)
+                continue
+            if line.startswith("@glob "):
+                pattern = line[len("@glob "):].strip()
+                result = self._glob_search(pattern)
+                if result.startswith(("No files match", "Glob error")):
+                    cl("ERR", result)
+                else:
+                    print(result)
+                continue
+
             self.memory.add("user", line)
 
             response = self._stream(gray=False)
@@ -1448,6 +1497,7 @@ RULES:
             final = response
 
             if self.mode != "plan":
+                consecutive_failures = 0
                 for rnd in range(MAX_TOOL_ROUNDS):
                     results = self._process_ai_response(final, heal=False)
                     if not results:
@@ -1456,6 +1506,15 @@ RULES:
                     c("DIM", f"\n  \u2501 round {rnd+1}/{MAX_TOOL_ROUNDS} \u2501\n")
 
                     self.memory.add("tool", self._format_tool_results(results))
+
+                    for r in results:
+                        if not r.get("success", True):
+                            consecutive_failures += 1
+                        else:
+                            consecutive_failures = 0
+                    if consecutive_failures >= 3:
+                        c("WARN", f"\n  \u23b9 circuit breaker: {consecutive_failures} consecutive tool failures\n")
+                        break
 
                     next_resp = self._stream(gray=False)
                     if next_resp is None:
