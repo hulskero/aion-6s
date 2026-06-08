@@ -157,8 +157,6 @@ DESTRUCTIVE = [
     r'\btelnet\b',
     r'\bnmap\b',
     r'\bsysctl\b',
-    r'\bkilla',
-    r'\bkillall\b',
     r'\blaunchctl\b',
     r'\bdmesg\b',
 ]
@@ -184,13 +182,13 @@ def check(cmd):
 
 
 def check_ai_response(text):
-    """Pre-check AI response for dangerous commands before execution"""
-    dangerous_keywords = ["rm -rf", "dd if=", ":(){", "mkfs.", "reboot", "poweroff", "halt"]
+    """Pre-check AI response for dangerous commands before execution.
+    Uses the same BLOCKED/DESTRUCTIVE patterns as check()."""
     for match in _AI_CMD_RE.finditer(text):
         cmd = match.group(1).strip()
-        for kw in dangerous_keywords:
-            if kw in cmd.lower():
-                return f"AI response blocked: contains '{kw}'"
+        reason, _ = check(cmd)
+        if reason:
+            return f"AI response blocked: {reason}"
     return None
 
 

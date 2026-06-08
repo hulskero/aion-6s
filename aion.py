@@ -74,12 +74,14 @@ def cl(color, text):
     print(f"{ANSI[color]}{text}{ANSI['RST']}")
 
 
-_SECRET_INDICATORS = ("nvapi-", "sk-", "ghp_", "@")
+_SECRET_INDICATORS = ("nvapi-", "sk-", "ghp_", "@", "/Users/")
 _SECRET_PATTERNS = [
     (re.compile(r'nvapi-[A-Za-z0-9\-_]{20,}'), 'nvapi-[REDACTED]'),
     (re.compile(r'sk-[A-Za-z0-9]{20,}'), 'sk-[REDACTED]'),
     (re.compile(r'ghp_[A-Za-z0-9]{20,}'), 'ghp_[REDACTED]'),
     (re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'), '[REDACTED_EMAIL]'),
+    (re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'), '[REDACTED_IP]'),
+    (re.compile(r'/Users/[A-Za-z0-9_\-]+/'), '/Users/[REDACTED]/'),
 ]
 
 
@@ -181,12 +183,13 @@ class AION:
         """Validate and sanitize config values"""
         if not isinstance(config, dict):
             return {
-                "request_timeout": 200,
+                "request_timeout": 90,
                 "max_context_pairs": 5,
                 "max_tokens": 512,
                 "max_heal_attempts": 3,
                 "temperature": 0.7,
                 "rate_limit": 30,
+                "retry_max": 5,
                 "jailbreak_mode": "auto",
                 "base_url": "https://integrate.api.nvidia.com/v1",
                 "model": "deepseek-ai/deepseek-v4-flash",
@@ -215,11 +218,11 @@ class AION:
         if config.get("jailbreak_mode") not in ("auto", "newterm", "ashell"):
             config["jailbreak_mode"] = "auto"
 
-        tout = config.get("request_timeout", 200)
-        if not isinstance(tout, (int, float)) or tout < 15:
-            config["request_timeout"] = 200
-        elif tout > 200:
-            config["request_timeout"] = 200
+        tout = config.get("request_timeout", 90)
+        if not isinstance(tout, (int, float)) or tout < 30:
+            config["request_timeout"] = 90
+        elif tout > 180:
+            config["request_timeout"] = 90
 
         rl = config.get("rate_limit", 30)
         if not isinstance(rl, int) or rl < 1:
@@ -242,7 +245,7 @@ class AION:
         config.setdefault("jailbreak_mode", "auto")
         config.setdefault("temperature", 0.7)
         if "request_timeout" not in config:
-            config["request_timeout"] = 200
+            config["request_timeout"] = 90
         if "rate_limit" not in config:
             config["rate_limit"] = 30
 
@@ -258,8 +261,9 @@ class AION:
             "max_heal_attempts": 3,
             "temperature": 0.7,
             "max_tokens": 512,
-            "request_timeout": 200,
-            "rate_limit": 30
+            "request_timeout": 90,
+            "rate_limit": 30,
+            "retry_max": 5
         }
 
         # Prefer environment variable for API key (more secure)
@@ -344,7 +348,7 @@ class AION:
         self.jailbreak = Jailbreak(
             self.config.get("jailbreak_mode", "auto"),
             workspace=self.workspace,
-            timeout=self.config.get("request_timeout", 200),
+            timeout=self.config.get("request_timeout", 90),
         )
         self.memory = MemoryManager(self.config.get("max_context_pairs", 5))
         self.healer = SelfHeal(self.bridge, self.config.get("max_heal_attempts", 3))
@@ -455,6 +459,8 @@ RULES:
                 print(f"{ANSI['GRY']}  │{ANSI['RST']} {ANSI['ERR']}{line}{ANSI['RST']}")
 
         if result and not result["success"] and result["stderr"] and allow_heal:
+            if self.mode == "plan":
+                return {"success": True, "stdout": "", "stderr": "", "exit_code": 0}
             c("WARN", "  \u21bb healing...")
             fix = self.healer.heal(cmd, result["stderr"])
             if fix and fix != cmd:
@@ -586,7 +592,6 @@ RULES:
     def _do_update(self, args=""):
         import subprocess as _sp
         import shutil as _su
-        import py_compile as _pc
         import tempfile as _tf
         import json as _json
 
@@ -985,7 +990,7 @@ RULES:
             path = os.path.join(SESSION_DIR, f"{name}.json")
             data = {
                 "mode": self.mode,
-                "config": self.config,
+                "config": {k: v for k, v in self.config.items() if k != "api_key"},
                 "context": self.memory.get_context(),
                 "cmd_history": self.cmd_history[-20:],
             }
@@ -1014,10 +1019,13 @@ RULES:
             parts = cmd.split(None, 1)
             if len(parts) == 1:
                 cl("SYS", "Available NVIDIA models:")
-                cl("SYS", "  nvidia/nemotron-mini-4b-instruct  - Fastest (4B, low bandwidth)")
-                cl("SYS", "  deepseek-ai/deepseek-v4-flash     - Balanced (default)")
-                cl("SYS", "  deepseek-ai/deepseek-v4           - Full version")
-                cl("SYS", "  nvidia/llama-3.1-nemotron-70b    - Large")
+                cl("SYS", "  nvidia/nemotron-mini-4b-instruct     - Fastest (4B, low bandwidth)")
+                cl("SYS", "  deepseek-ai/deepseek-v4-flash        - Balanced (default)")
+                cl("SYS", "  deepseek-ai/deepseek-v4              - DeepSeek V4 full")
+                cl("SYS", "  deepseek-ai/deepseek-v4-pro          - DeepSeek V4 Pro")
+                cl("SYS", "  nvidia/llama-3.1-nemotron-70b       - Nemotron 70B")
+                cl("SYS", "  nvidia/llama-3.3-nemotron-super-49b-v1  - Nemotron Super 49B")
+                cl("SYS", "  nvidia/nvidia-nemotron-nano-9b-v2    - Nemotron Nano 9B v2")
                 cl("SYS", f"Current: {self.config['model']}")
             else:
                 new_model = parts[1].strip()
@@ -1025,7 +1033,10 @@ RULES:
                     "nvidia/nemotron-mini-4b-instruct",
                     "deepseek-ai/deepseek-v4-flash",
                     "deepseek-ai/deepseek-v4",
+                    "deepseek-ai/deepseek-v4-pro",
                     "nvidia/llama-3.1-nemotron-70b",
+                    "nvidia/llama-3.3-nemotron-super-49b-v1",
+                    "nvidia/nvidia-nemotron-nano-9b-v2",
                 ]
                 if new_model in valid_models:
                     self.config["model"] = new_model
@@ -1120,7 +1131,6 @@ RULES:
 
     def _read_event(self, path, timeout=30):
         """Block-read a line from a named pipe with timeout."""
-        import select
         import threading
         self._ensure_fifo(path)
         result = [None]

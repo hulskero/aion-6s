@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """AION-6S bootstrap — download full repo from GitHub.
-Usage on iPhone (a-Shell):  python3 bootstrap.py  &&  cd aion-6s  &&  python3 aion.py
+Usage on iPhone (a-Shell):  python3 bootstrap.py  &&  python3 aion.py
 """
 import os, sys, urllib.request, json
 
@@ -10,6 +10,8 @@ FILES = {
     "config.example.json": "config.example.json",
     "README.md": "README.md",
     ".gitignore": ".gitignore",
+    "pytest.ini": "pytest.ini",
+    "pyproject.toml": "pyproject.toml",
     "core/__init__.py": "core/__init__.py",
     "core/bridge.py": "core/bridge.py",
     "core/jailbreak.py": "core/jailbreak.py",
@@ -35,10 +37,17 @@ FILES = {
     "triggers.json": "triggers.json",
     "scripts/install_daemon.sh": "scripts/install_daemon.sh",
     "scripts/jetsam_setup.sh": "scripts/jetsam_setup.sh",
+    "test_guardrails_syntax.py": "test_guardrails_syntax.py",
+    "tests/conftest.py": "tests/conftest.py",
+    "tests/test_input_validator.py": "tests/test_input_validator.py",
+    "tests/test_ios_system.py": "tests/test_ios_system.py",
+    "tests/helpers/mock_bridge.py": "tests/helpers/mock_bridge.py",
+    "tests/helpers/mock_ioreg.py": "tests/helpers/mock_ioreg.py",
+    "tests/helpers/mock_safe_exec.py": "tests/helpers/mock_safe_exec.py",
 }
 
 def main():
-    root = os.path.join(os.getcwd(), "aion-6s")
+    root = os.getcwd()
     total = len(FILES)
     ok = 0
     for relpath, name in FILES.items():
@@ -56,9 +65,8 @@ def main():
             ok += 1
         except Exception as e:
             sys.stdout.write(f"FAIL: {e}\n")
-    print(f"\nDownloaded {ok}/{total} files to {root}")
+    print(f"\nDownloaded {ok}/{total} files")
     print(f"\nRun:")
-    print(f"  cd {root}")
     print(f"  python3 aion.py")
 
 if __name__ == "__main__":

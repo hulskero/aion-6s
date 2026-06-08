@@ -7,3 +7,7 @@ dist/
 build/
 sessions/
 heal_cache.json
+aion-audit.log
+.pytest_cache/
+workspace/
+aion-6s/

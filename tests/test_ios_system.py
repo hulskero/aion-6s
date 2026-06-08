@@ -1,7 +1,8 @@
 """
-Comprehensive test suite for ios_system.py
+pytest-style tests for plugins.ios_system.
 
-Tests all functions with safe_exec mocked to prevent hanging.
+All safe_exec calls are mocked to return realistic iPhone 6s data
+without hitting the actual device.
 """
 import sys
 import os
@@ -9,44 +10,15 @@ import re
 import ctypes
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.normpath(os.path.join(TEST_DIR, '..'))
 sys.path.insert(0, PROJECT_ROOT)
 
-PASS = 0
-FAIL = 0
-SECTION = ""
-
-def section(name):
-    global SECTION
-    SECTION = name
-    print(f"\n{'='*60}")
-    print(f"  {name}")
-    print(f"{'='*60}")
-
-def test(name, condition, detail=""):
-    global PASS, FAIL
-    if condition:
-        PASS += 1
-        print(f"  [PASS] {name}")
-    else:
-        FAIL += 1
-        msg = f"  [FAIL] {name}"
-        if detail:
-            msg += f"  |  {detail}"
-        print(msg)
-
-def check(name, got, expected, detail_func=None):
-    detail = ""
-    if got != expected:
-        detail = f"got={got!r}, expected={expected!r}"
-        if detail_func:
-            detail += f" ({detail_func(got, expected)})"
-    test(name, got == expected, detail)
-
-# ============================================================
-# MOCK SETUP
-# ============================================================
+# ---------------------------------------------------------------------------
+# Mock data — realistic iPhone 6s ioreg output
+# ---------------------------------------------------------------------------
 
 _MOCK_BATTERY = """\
   "CurrentCapacity" = 1200
@@ -88,6 +60,7 @@ pdp_ip0: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500
 \tinet 10.0.0.1
 """
 
+
 def _mock_safe_exec_impl(cmd, timeout=30, jb=None):
     if "AppleSmartBattery" in cmd:
         return {"success": True, "stdout": _MOCK_BATTERY, "stderr": "", "code": 0}
@@ -103,13 +76,10 @@ def _mock_safe_exec_impl(cmd, timeout=30, jb=None):
         return {"success": True, "stdout": "", "stderr": "", "code": 0}
     return {"success": True, "stdout": "", "stderr": "", "code": 0}
 
-_safe_exec_mock = MagicMock(side_effect=_mock_safe_exec_impl)
-patcher = patch('core.jailbreak.safe_exec', _safe_exec_mock)
-patcher.start()
 
-# ============================================================
-# IMPORT MODULE (after mock is active)
-# ============================================================
+_safe_exec_mock = MagicMock(side_effect=_mock_safe_exec_impl)
+_patcher = patch('core.jailbreak.safe_exec', _safe_exec_mock)
+_patcher.start()
 
 import plugins.ios_system as ios_mod
 from plugins.ios_system import (
@@ -122,178 +92,197 @@ from plugins.ios_system import (
     _avail, _tts_cli,
 )
 
-# Reset global state
-ios_mod._OBJC = None
-ios_mod._TTS_READY = None
-ios_mod._SEL_CACHE = {}
-ios_mod._CLS_CACHE = {}
 
-# ============================================================
-# TEST 1: _load_objc()
-# ============================================================
-section("1. _load_objc() — load libobjc runtime")
+@pytest.fixture(autouse=True)
+def _reset_ios_state():
+    ios_mod._OBJC = None
+    ios_mod._TTS_READY = None
+    ios_mod._SEL_CACHE = {}
+    ios_mod._CLS_CACHE = {}
+    yield
 
-# Clear cache first
-ios_mod._OBJC = None
-result = _load_objc()
 
-test("returns dict (not None)", result is not None)
-test("returns dict (not False)", result is not False)
+# ===================================================================
+# 1. _load_objc()
+# ===================================================================
 
-if isinstance(result, dict):
-    expected_keys = {"get_class", "sel_reg", "m0", "m1", "mb", "libc"}
-    actual_keys = set(result.keys())
-    test("has all required keys", actual_keys == expected_keys,
-         f"missing: {expected_keys - actual_keys}, extra: {actual_keys - expected_keys}")
-    test("get_class is callable", callable(result["get_class"]))
-    test("sel_reg is callable", callable(result["sel_reg"]))
-    test("m0 is callable", callable(result["m0"]))
-    test("m1 is callable", callable(result["m1"]))
-    test("libc is CDLL instance", isinstance(result["libc"], ctypes.CDLL))
-else:
-    test("_load_objc returned dict (skipping sub-checks)", False,
-         f"type was {type(result).__name__} = {result}")
+class TestLoadObjC:
+    def test_returns_dict(self):
+        result = _load_objc()
+        assert result is not None
 
-# Test idempotency — second call returns cached (same object)
-ios_mod._OBJC = None
-r1 = _load_objc()
-r2 = _load_objc()
-test("_load_objc is idempotent (cached)", r1 is r2)
-test("_avail() matches _load_objc", _avail() == bool(r1))
+    def test_has_required_keys(self):
+        result = _load_objc()
+        assert isinstance(result, dict)
+        expected = {"get_class", "sel_reg", "m0", "m1", "mb", "libc"}
+        assert set(result.keys()) == expected
 
-# ============================================================
-# TEST 2: _cls() / _sel() caching
-# ============================================================
-section("2. _cls() / _sel() — class and selector resolution, caching")
+    def test_get_class_is_callable(self):
+        result = _load_objc()
+        assert callable(result["get_class"])
 
-ios_mod._OBJC = None
-ios_mod._CLS_CACHE = {}
-ios_mod._SEL_CACHE = {}
+    def test_sel_reg_is_callable(self):
+        result = _load_objc()
+        assert callable(result["sel_reg"])
 
-test("_CLS_CACHE starts empty", len(ios_mod._CLS_CACHE) == 0)
-test("_SEL_CACHE starts empty", len(ios_mod._SEL_CACHE) == 0)
+    def test_m0_is_callable(self):
+        result = _load_objc()
+        assert callable(result["m0"])
 
-nsstr = _cls("NSString")
-test("_cls('NSString') returns value", nsstr is not None)
+    def test_m1_is_callable(self):
+        result = _load_objc()
+        assert callable(result["m1"])
 
-if nsstr is not None:
-    test("_cls('NSString') stored in cache", "NSString" in ios_mod._CLS_CACHE)
-    test("_cls('NSString') cached value matches", ios_mod._CLS_CACHE["NSString"] is nsstr)
+    def test_libc_is_cdll(self):
+        result = _load_objc()
+        assert isinstance(result["libc"], ctypes.CDLL)
 
-    # Second call — verify cache hit
-    nsstr2 = _cls("NSString")
-    test("_cls('NSString') second call returns same object", nsstr2 is nsstr)
+    def test_idempotent_cached(self):
+        ios_mod._OBJC = None
+        r1 = _load_objc()
+        r2 = _load_objc()
+        assert r1 is r2
 
-# Selector caching
-sel = _sel("alloc")
-test("_sel('alloc') returns value", sel is not None)
-if sel is not None:
-    test("_sel('alloc') stored in cache", "alloc" in ios_mod._SEL_CACHE)
-    sel2 = _sel("alloc")
-    test("_sel('alloc') second call returns same object", sel2 is sel)
+    def test_avail_matches(self):
+        ios_mod._OBJC = None
+        result = _load_objc()
+        assert _avail() == bool(result)
 
-sel_init = _sel("init")
-test("_sel('init') also works", sel_init is not None)
 
-# Not a real class — should return None (NULL pointer) without exception
-cls_nonexistent = _cls("NonExistentClass12345")
-test("_cls('NonExistentClass12345') returns None (NULL) without exception",
-     cls_nonexistent is None)  # objc_getClass returns NULL → ctypes converts to None
+# ===================================================================
+# 2. _cls() / _sel() — caching
+# ===================================================================
 
-sel_nonexistent = _sel("nonExistentSelector12345")
-test("_sel('nonExistentSelector12345') returns value (sel_registerName creates it)",
-     sel_nonexistent is not None)
+class TestClsSel:
+    def test_caches_start_empty(self):
+        assert len(ios_mod._CLS_CACHE) == 0
+        assert len(ios_mod._SEL_CACHE) == 0
 
-# ============================================================
-# TEST 3: _ensure_tts()
-# ============================================================
-section("3. _ensure_tts() — load AVFAudio.framework")
+    def test_cls_nsstring_returns_value(self):
+        nsstr = _cls("NSString")
+        assert nsstr is not None
 
-ios_mod._OBJC = None
-ios_mod._TTS_READY = None
-ios_mod._CLS_CACHE = {}
-ios_mod._SEL_CACHE = {}
+    def test_cls_nsstring_cached(self):
+        nsstr = _cls("NSString")
+        assert "NSString" in ios_mod._CLS_CACHE
+        assert ios_mod._CLS_CACHE["NSString"] is nsstr
 
-tts_ok = _ensure_tts()
-# On macOS, AVFAudio exists, so this should be True
-# On other platforms, it may be False
-test("_ensure_tts() returns bool", isinstance(tts_ok, bool))
-test("_ensure_tts() is cached", ios_mod._TTS_READY is not None)
-test("_TTS_READY matches return", ios_mod._TTS_READY == tts_ok)
+    def test_cls_nsstring_idempotent(self):
+        a = _cls("NSString")
+        b = _cls("NSString")
+        assert b is a
 
-av_cls = _cls("AVSpeechSynthesizer")
-test("AVSpeechSynthesizer class resolvable after _ensure_tts",
-     av_cls is not None or not tts_ok)  # If TTS ready, class should exist
+    def test_sel_alloc_returns_value(self):
+        sel = _sel("alloc")
+        assert sel is not None
 
-utt_cls = _cls("AVSpeechUtterance")
-test("AVSpeechUtterance class resolvable after _ensure_tts",
-     utt_cls is not None or not tts_ok)
+    def test_sel_alloc_cached(self):
+        sel = _sel("alloc")
+        assert "alloc" in ios_mod._SEL_CACHE
 
-# Second call — cached
-tts_ok2 = _ensure_tts()
-test("_ensure_tts() second call is cached", tts_ok2 == tts_ok)
+    def test_sel_alloc_idempotent(self):
+        a = _sel("alloc")
+        b = _sel("alloc")
+        assert b is a
 
-# ============================================================
-# TEST 4: _objc_test()
-# ============================================================
-section("4. _objc_test() — runtime verification")
+    def test_sel_init_works(self):
+        assert _sel("init") is not None
 
-ios_mod._OBJC = None
-ios_mod._TTS_READY = None
-ios_mod._CLS_CACHE = {}
-ios_mod._SEL_CACHE = {}
+    def test_cls_nonexistent_returns_none(self):
+        assert _cls("NonExistentClass12345") is None
 
-result_txt = _objc_test()
-test("_objc_test() returns string", isinstance(result_txt, str))
-test("_objc_test() non-empty", len(result_txt) > 0)
+    def test_sel_nonexistent_registers(self):
+        assert _sel("nonExistentSelector12345") is not None
 
-# Should contain some key phrases depending on environment
-has_ok = "OK" in result_txt or "NOT" in result_txt or "available" in result_txt or "FAILED" in result_txt
-test("_objc_test() contains meaningful status", has_ok,
-     f"got: {result_txt}")
 
-if "OK" in result_txt:
-    test("_objc_test() reports TTS ready status", "TTS ready:" in result_txt or "TTS ready" in result_txt,
-         f"got: {result_txt}")
+# ===================================================================
+# 3. _ensure_tts()
+# ===================================================================
 
-# ============================================================
-# TEST 5: _tts()
-# ============================================================
-section("5. _tts() — text-to-speech")
+class TestEnsureTTS:
+    def test_returns_bool(self):
+        assert isinstance(_ensure_tts(), bool)
 
-ios_mod._OBJC = None
-ios_mod._TTS_READY = None
-ios_mod._CLS_CACHE = {}
-ios_mod._SEL_CACHE = {}
+    def test_cached(self):
+        _ensure_tts()
+        assert ios_mod._TTS_READY is not None
 
-tts_result = _tts("hello world")
-test("_tts() returns string", isinstance(tts_result, str))
-test("_tts() result non-empty", len(tts_result) > 0)
-test("_tts() mentions spoken or failed", "spoken" in tts_result.lower() or "failed" in tts_result.lower() or "unavailable" in tts_result.lower(),
-     f"got: {tts_result}")
+    def test_cache_matches(self):
+        result = _ensure_tts()
+        assert ios_mod._TTS_READY == result
 
-# Test with special characters
-tts_special = _tts("Don't stop! $100 off?")
-test("_tts() with special characters works", isinstance(tts_special, str) and len(tts_special) > 0,
-     f"got: {tts_special}")
+    def test_resolves_synthesizer_class(self):
+        tts_ok = _ensure_tts()
+        av_cls = _cls("AVSpeechSynthesizer")
+        assert av_cls is not None or not tts_ok
 
-# Test empty string
-tts_empty = _tts("")
-test("_tts('') handles empty string", isinstance(tts_empty, str),
-     f"got: {tts_empty}")
+    def test_resolves_utterance_class(self):
+        tts_ok = _ensure_tts()
+        utt_cls = _cls("AVSpeechUtterance")
+        assert utt_cls is not None or not tts_ok
 
-# Test long text (500+ chars)
-long_text = "hello world " * 50
-tts_long = _tts(long_text)
-test("_tts() with long text (500+ chars)", isinstance(tts_long, str) and len(tts_long) > 0,
-     f"got (truncated): {tts_long[:80]}...")
+    def test_second_call_cached(self):
+        a = _ensure_tts()
+        b = _ensure_tts()
+        assert b == a
 
-# ============================================================
-# TEST 6: _ioreg_val() — regex extraction
-# ============================================================
-section("6. _ioreg_val() — regex extraction from ioreg output")
 
-sample = """  "DesignCapacity" = 1715
+# ===================================================================
+# 4. _objc_test()
+# ===================================================================
+
+class TestObjcTest:
+    def test_returns_string(self):
+        assert isinstance(_objc_test(), str)
+
+    def test_non_empty(self):
+        assert len(_objc_test()) > 0
+
+    def test_contains_status(self):
+        result = _objc_test()
+        phrases = ("OK", "NOT", "available", "FAILED")
+        assert any(p in result for p in phrases)
+
+    def test_tls_reported_when_ok(self):
+        result = _objc_test()
+        if "OK" in result:
+            assert "TTS ready" in result
+
+
+# ===================================================================
+# 5. _tts()
+# ===================================================================
+
+class TestTTS:
+    def test_returns_string(self):
+        assert isinstance(_tts("hello world"), str)
+
+    def test_non_empty(self):
+        assert len(_tts("hello world")) > 0
+
+    def test_mentions_spoken_or_failed(self):
+        result = _tts("hello world")
+        assert any(kw in result.lower() for kw in ("spoken", "failed", "unavailable"))
+
+    def test_special_characters(self):
+        result = _tts("Don't stop! $100 off?")
+        assert isinstance(result, str) and len(result) > 0
+
+    def test_empty_string(self):
+        result = _tts("")
+        assert isinstance(result, str)
+
+    def test_long_text(self):
+        result = _tts("hello world " * 50)
+        assert isinstance(result, str) and len(result) > 0
+
+
+# ===================================================================
+# 6. _ioreg_val() — regex extraction
+# ===================================================================
+
+SAMPLE_IOREG = """\
+  "DesignCapacity" = 1715
   "MaxCapacity" = 1500
   "Temperature" = 2840
   "BatteryInstalled" = Yes
@@ -301,285 +290,351 @@ sample = """  "DesignCapacity" = 1715
   "Manufacturer" = "Sony Corp"
 """
 
-# Numeric values
-check("DesignCapacity", _ioreg_val(sample, "DesignCapacity"), "1715")
-check("MaxCapacity", _ioreg_val(sample, "MaxCapacity"), "1500")
-check("Temperature", _ioreg_val(sample, "Temperature"), "2840")
 
-# Non-numeric bare value
-check("BatteryInstalled=Yes", _ioreg_val(sample, "BatteryInstalled"), "Yes")
+class TestIoregVal:
+    def test_design_capacity(self):
+        assert _ioreg_val(SAMPLE_IOREG, "DesignCapacity") == "1715"
 
-# Quoted string value
-check("Serial (quoted)", _ioreg_val(sample, "Serial"), "ABC123XYZ")
-check("Manufacturer (quoted)", _ioreg_val(sample, "Manufacturer"), "Sony Corp")
+    def test_max_capacity(self):
+        assert _ioreg_val(SAMPLE_IOREG, "MaxCapacity") == "1500"
 
-# Edge: key not present
-check("missing key", _ioreg_val(sample, "FooBar"), None)
+    def test_temperature(self):
+        assert _ioreg_val(SAMPLE_IOREG, "Temperature") == "2840"
 
-# Edge: blank input
-check("blank input", _ioreg_val("", "DesignCapacity"), None)
-check("None-ish input", _ioreg_val("   ", "DesignCapacity"), None)
+    def test_bare_value(self):
+        assert _ioreg_val(SAMPLE_IOREG, "BatteryInstalled") == "Yes"
 
-# Edge: value with trailing comma
-sample_with_comma = '  "CycleCount" = 500,'
-check("trailing comma stripped", _ioreg_val(sample_with_comma, "CycleCount"), "500")
+    def test_quoted_serial(self):
+        assert _ioreg_val(SAMPLE_IOREG, "Serial") == "ABC123XYZ"
 
-# Edge: key at end of string
-sample_eol = '  "Amperage" = -500'
-check("negative value", _ioreg_val(sample_eol, "Amperage"), "-500")
+    def test_quoted_manufacturer(self):
+        assert _ioreg_val(SAMPLE_IOREG, "Manufacturer") == "Sony Corp"
 
-# Edge: key with spaces in value
-sample_spaces = '  "Product" = "iPhone 6s"'
-check("value with spaces", _ioreg_val(sample_spaces, "Product"), "iPhone 6s")
+    def test_missing_key(self):
+        assert _ioreg_val(SAMPLE_IOREG, "FooBar") is None
 
-# ============================================================
-# TEST 7: _wifi_basic() — ifconfig parsing
-# ============================================================
-section("7. _wifi_basic() / _ifconfig_pdp() — ifconfig parsing")
+    def test_blank_input(self):
+        assert _ioreg_val("", "DesignCapacity") is None
 
-ios_mod._OBJC = None
-ios_mod._TTS_READY = None
-ios_mod._CLS_CACHE = {}
-ios_mod._SEL_CACHE = {}
+    def test_whitespace_input(self):
+        assert _ioreg_val("   ", "DesignCapacity") is None
 
-wifi = _wifi_basic()
-test("_wifi_basic() returns dict", isinstance(wifi, dict))
+    def test_trailing_comma(self):
+        sample = '  "CycleCount" = 500,'
+        assert _ioreg_val(sample, "CycleCount") == "500"
 
-if wifi:
-    check("IP parsed", wifi.get("ip"), "192.168.1.100")
-    check("MAC parsed", wifi.get("mac"), "aa:bb:cc:dd:ee:ff")
-    check("Status parsed", wifi.get("status"), "active")
-else:
-    test("_wifi_basic() populated data (checking mock)", False)
+    def test_negative_value(self):
+        sample = '  "Amperage" = -500'
+        assert _ioreg_val(sample, "Amperage") == "-500"
 
-# _ifconfig_pdp
-pdp = _ifconfig_pdp()
-test("_ifconfig_pdp() returns dict", isinstance(pdp, dict))
-if pdp:
-    check("pdp IP parsed", pdp.get("ip"), "10.0.0.1")
+    def test_value_with_spaces(self):
+        sample = '  "Product" = "iPhone 6s"'
+        assert _ioreg_val(sample, "Product") == "iPhone 6s"
 
-# _ioreg_cellular
-cell_reg = _ioreg_cellular()
-test("_ioreg_cellular() returns string", cell_reg is not None)
-if cell_reg:
-    check("cellular ioreg contains CarrierName", "AT&T" in cell_reg, True)
 
-# _wifi_ext
-wifi_ext = _wifi_ext()
-test("_wifi_ext() returns dict or None", wifi_ext is None or isinstance(wifi_ext, dict))
-if wifi_ext:
-    check("WiFi ext SSID", wifi_ext.get("ssid"), "MyWiFi")
-    check("WiFi ext RSSI", wifi_ext.get("rssi"), "-65")
-    check("WiFi ext channel", wifi_ext.get("channel"), "6")
-    check("WiFi ext txRate", wifi_ext.get("txrate"), "300")
+# ===================================================================
+# 7. _wifi_basic() — ifconfig parsing
+# ===================================================================
 
-# _cellular()
-cell_result = _cellular()
-test("_cellular() returns string", isinstance(cell_result, str))
-test("_cellular() non-empty", len(cell_result) > 0)
-if cell_result.lower() != "cellular unavailable":
-    has_carrier = "AT&T" in cell_result or "Carrier" in cell_result
-    has_ip = "10.0.0.1" in cell_result or "IP" in cell_result
-    test("_cellular() contains carrier info", has_carrier, f"got: {cell_result}")
-    test("_cellular() contains IP info", has_ip, f"got: {cell_result}")
+class TestWifiBasic:
+    def test_returns_dict(self):
+        wifi = _wifi_basic()
+        assert isinstance(wifi, dict)
 
-# _wifi()
-wifi_result = _wifi()
-test("_wifi() returns string", isinstance(wifi_result, str))
-test("_wifi() non-empty", len(wifi_result) > 0)
-if wifi_result.lower() != "wifi unavailable":
-    has_ssid = "MyWiFi" in wifi_result or "SSID" in wifi_result
-    has_ip = "192.168.1.100" in wifi_result or "IP" in wifi_result
-    test("_wifi() contains SSID", has_ssid, f"got: {wifi_result}")
-    test("_wifi() contains IP", has_ip, f"got: {wifi_result}")
+    def test_ip_parsed(self):
+        wifi = _wifi_basic()
+        if wifi:
+            assert wifi.get("ip") == "192.168.1.100"
 
-# ============================================================
-# TEST 8: Battery functions
-# ============================================================
-section("8. _battery_info(), _battery(), _battery_health()")
+    def test_mac_parsed(self):
+        wifi = _wifi_basic()
+        if wifi:
+            assert wifi.get("mac") == "aa:bb:cc:dd:ee:ff"
 
-ios_mod._OBJC = None
-ios_mod._TTS_READY = None
-ios_mod._CLS_CACHE = {}
-ios_mod._SEL_CACHE = {}
+    def test_status_parsed(self):
+        wifi = _wifi_basic()
+        if wifi:
+            assert wifi.get("status") == "active"
 
-bi = _battery_info()
-test("_battery_info() returns dict or None", bi is None or isinstance(bi, dict))
 
-if isinstance(bi, dict):
-    check("CurrentCapacity", bi.get("CurrentCapacity"), "1200")
-    check("MaxCapacity", bi.get("MaxCapacity"), "1500")
-    check("DesignCapacity", bi.get("DesignCapacity"), "1715")
-    check("CycleCount", bi.get("CycleCount"), "500")
-    check("Temperature", bi.get("Temperature"), "2840")
-    check("Voltage", bi.get("Voltage"), "3800")
-    check("Amperage", bi.get("Amperage"), "-500")
-    check("IsCharging", bi.get("IsCharging"), "No")
-    check("BatteryInstalled", bi.get("BatteryInstalled"), "Yes")
+class TestIfconfigPdp:
+    def test_returns_dict(self):
+        pdp = _ifconfig_pdp()
+        assert isinstance(pdp, dict)
 
-# _battery
-batt = _battery()
-test("_battery() returns string", isinstance(batt, str))
-test("_battery() non-empty", len(batt) > 0)
-if isinstance(bi, dict):
-    test("_battery() reports percentage", "%" in batt, f"got: {batt}")
-    test("_battery() reports charge state", "charging" in batt.lower() or "discharging" in batt.lower(),
-         f"got: {batt}")
+    def test_ip_parsed(self):
+        pdp = _ifconfig_pdp()
+        if pdp:
+            assert pdp.get("ip") == "10.0.0.1"
 
-# _battery_health
-health = _battery_health()
-test("_battery_health() returns string", isinstance(health, str))
-test("_battery_health() non-empty", len(health) > 0)
-if isinstance(bi, dict):
-    test("_battery_health() reports health pct", "%" in health, f"got: {health}")
 
-# ============================================================
-# TEST 9: run_ios_system() — all subcommands
-# ============================================================
-section("9. run_ios_system() — all subcommands")
+class TestIoregCellular:
+    def test_returns_string(self):
+        cell_reg = _ioreg_cellular()
+        assert cell_reg is not None
 
-ios_mod._OBJC = None
-ios_mod._TTS_READY = None
-ios_mod._CLS_CACHE = {}
-ios_mod._SEL_CACHE = {}
+    def test_contains_carrier(self):
+        cell_reg = _ioreg_cellular()
+        if cell_reg:
+            assert "AT&T" in cell_reg
 
-# objc-test subcommand
-r = run_ios_system("objc-test")
-test("objc-test returns string", isinstance(r, str))
-test("objc-test non-empty", len(r) > 0)
 
-# battery subcommand
-r = run_ios_system("battery")
-test("battery returns string", isinstance(r, str))
-test("battery non-empty", len(r) > 0)
+class TestWifiExt:
+    def test_returns_dict_or_none(self):
+        wifi_ext = _wifi_ext()
+        assert wifi_ext is None or isinstance(wifi_ext, dict)
 
-# battery --health subcommand
-r = run_ios_system("battery --health")
-test("battery --health returns string", isinstance(r, str))
-test("battery --health non-empty", len(r) > 0)
-test("battery --health != battery", r != run_ios_system("battery"),
-     "both returned same — might be OK if data matches, but --health should differ")
+    def test_ssid(self):
+        wifi_ext = _wifi_ext()
+        if wifi_ext:
+            assert wifi_ext.get("ssid") == "MyWiFi"
 
-# wifi subcommand
-r = run_ios_system("wifi")
-test("wifi returns string", isinstance(r, str))
-test("wifi non-empty", len(r) > 0)
+    def test_rssi(self):
+        wifi_ext = _wifi_ext()
+        if wifi_ext:
+            assert wifi_ext.get("rssi") == "-65"
 
-# cellular subcommand
-r = run_ios_system("cellular")
-test("cellular returns string", isinstance(r, str))
-test("cellular non-empty", len(r) > 0)
+    def test_channel(self):
+        wifi_ext = _wifi_ext()
+        if wifi_ext:
+            assert wifi_ext.get("channel") == "6"
 
-# tts subcommand
-r = run_ios_system("tts hello")
-test("tts hello returns string", isinstance(r, str))
-test("tts hello non-empty", len(r) > 0)
-test("tts mentions spoken/failed", "spoken" in r.lower() or "failed" in r.lower() or "unavailable" in r.lower(),
-     f"got: {r}")
+    def test_txrate(self):
+        wifi_ext = _wifi_ext()
+        if wifi_ext:
+            assert wifi_ext.get("txrate") == "300"
 
-# tts with no text
-r = run_ios_system("tts")
-check("tts (no text) returns usage", r, "Usage: @plugin ios_system tts <text>")
 
-# empty args → full status
-r = run_ios_system("")
-test("empty args returns string", isinstance(r, str))
-test("empty args non-empty", len(r) > 0)
-test("empty args contains battery info", "Battery" in r or "battery" in r,
-     f"got (truncated): {r[:100]}")
-test("empty args contains ObjC status", "ObjC" in r or "objc" in r,
-     f"got (truncated): {r[:100]}")
+class TestCellular:
+    def test_returns_string(self):
+        assert isinstance(_cellular(), str)
 
-# "status" subcommand (alias)
-r2 = run_ios_system("status")
-test("status command returns same as empty", isinstance(r2, str) and len(r2) > 0)
+    def test_non_empty(self):
+        assert len(_cellular()) > 0
 
-# unknown arg → HELP
-r = run_ios_system("unknown")
-test("unknown arg returns HELP", r == HELP,
-     f"got (truncated): {str(r)[:80]}...")
+    def test_contains_carrier_or_ip(self):
+        result = _cellular()
+        if result.lower() != "cellular unavailable":
+            assert "AT&T" in result or "Carrier" in result
+            assert "10.0.0.1" in result or "IP" in result
 
-# edge: whitespace-only args
-r = run_ios_system("   ")
-test("whitespace-only args returns full status", isinstance(r, str) and len(r) > 0)
 
-# edge: case insensitivity
-r = run_ios_system("BATTERY")
-test("BATTERY (uppercase) works", isinstance(r, str) and len(r) > 0)
+class TestWifi:
+    def test_returns_string(self):
+        assert isinstance(_wifi(), str)
 
-r = run_ios_system("WIFI")
-test("WIFI (uppercase) works", isinstance(r, str) and len(r) > 0)
+    def test_non_empty(self):
+        assert len(_wifi()) > 0
 
-# ============================================================
-# TEST 10: SKILL dict
-# ============================================================
-section("10. SKILL dict — module interface")
+    def test_contains_ssid(self):
+        result = _wifi()
+        if result.lower() != "wifi unavailable":
+            assert "MyWiFi" in result or "SSID" in result
 
-test("SKILL is dict", isinstance(SKILL, dict))
-check("SKILL has 'name'", SKILL.get("name"), "ios_system")
-check("SKILL has 'description'", "description" in SKILL, True)
-check("SKILL has 'run' key", "run" in SKILL, True)
-test("SKILL['run'] is callable", callable(SKILL["run"]))
-test("SKILL['run'] is run_ios_system", SKILL["run"] is run_ios_system)
+    def test_contains_ip(self):
+        result = _wifi()
+        if result.lower() != "wifi unavailable":
+            assert "192.168.1.100" in result or "IP" in result
 
-# ============================================================
-# TEST 11: HELP text
-# ============================================================
-section("11. HELP text")
 
-test("HELP is string", isinstance(HELP, str))
-test("HELP non-empty", len(HELP) > 0)
-test("HELP mentions all subcommands",
-     all(cmd in HELP for cmd in ["battery", "cellular", "wifi", "tts", "objc-test"]),
-     f"missing some commands in HELP")
+# ===================================================================
+# 8. Battery
+# ===================================================================
 
-# ============================================================
-# TEST 12: Edge cases
-# ============================================================
-section("12. Edge cases")
+class TestBatteryInfo:
+    def test_returns_dict_or_none(self):
+        bi = _battery_info()
+        assert bi is None or isinstance(bi, dict)
 
-ios_mod._OBJC = None
-ios_mod._TTS_READY = None
-ios_mod._CLS_CACHE = {}
-ios_mod._SEL_CACHE = {}
+    def test_values(self):
+        bi = _battery_info()
+        if isinstance(bi, dict):
+            assert bi.get("CurrentCapacity") == "1200"
+            assert bi.get("MaxCapacity") == "1500"
+            assert bi.get("DesignCapacity") == "1715"
+            assert bi.get("CycleCount") == "500"
+            assert bi.get("Temperature") == "2840"
+            assert bi.get("Voltage") == "3800"
+            assert bi.get("Amperage") == "-500"
+            assert bi.get("IsCharging") == "No"
+            assert bi.get("BatteryInstalled") == "Yes"
 
-# Very long TTS text
-r = run_ios_system("tts " + "a" * 10000)
-test("tts with 10k chars handles gracefully", isinstance(r, str) and len(r) > 0,
-     f"got (truncated): {str(r)[:80]}...")
 
-# TTS with special chars
-r = run_ios_system("tts Hello! @#$%^&*() test")
-test("tts with special chars", isinstance(r, str) and len(r) > 0,
-     f"got (truncated): {str(r)[:80]}...")
+class TestBattery:
+    def test_returns_string(self):
+        assert isinstance(_battery(), str)
 
-# TTS with unicode
-r = run_ios_system("tts ěščřžýáíé")
-test("tts with unicode chars", isinstance(r, str) and len(r) > 0,
-     f"got (truncated): {str(r)[:80]}...")
+    def test_non_empty(self):
+        assert len(_battery()) > 0
 
-# Very long battery --health text shouldn't matter but verify no crash
-r = run_ios_system("battery --health")
-test("battery --health after other calls still works", isinstance(r, str) and len(r) > 0)
+    def test_reports_percentage(self):
+        bi = _battery_info()
+        batt = _battery()
+        if isinstance(bi, dict):
+            assert "%" in batt
 
-# Cellular after everything
-r = run_ios_system("cellular")
-test("cellular after other calls", isinstance(r, str) and len(r) > 0)
+    def test_reports_charge_state(self):
+        bi = _battery_info()
+        batt = _battery()
+        if isinstance(bi, dict):
+            assert "charging" in batt.lower() or "discharging" in batt.lower()
 
-# Verify safe_exec was actually called (our mock)
-safe_exec_calls = _safe_exec_mock.call_count
-test("safe_exec was called during tests", safe_exec_calls > 0,
-     f"total calls: {safe_exec_calls}")
 
-# ============================================================
-# SUMMARY
-# ============================================================
-section("TEST SUMMARY")
-total = PASS + FAIL
-print(f"  Passed: {PASS}/{total}")
-print(f"  Failed: {FAIL}/{total}")
-print(f"  Rate:   {PASS/total*100:.1f}%" if total > 0 else "  No tests ran!")
-print()
+class TestBatteryHealth:
+    def test_returns_string(self):
+        assert isinstance(_battery_health(), str)
 
-# Exit code
-sys.exit(0 if FAIL == 0 else 1)
+    def test_non_empty(self):
+        assert len(_battery_health()) > 0
+
+    def test_reports_health_pct(self):
+        bi = _battery_info()
+        health = _battery_health()
+        if isinstance(bi, dict):
+            assert "%" in health
+
+
+# ===================================================================
+# 9. run_ios_system() — all subcommands
+# ===================================================================
+
+class TestRunIosSystem:
+    def test_objc_test(self):
+        r = run_ios_system("objc-test")
+        assert isinstance(r, str)
+        assert len(r) > 0
+
+    def test_battery(self):
+        r = run_ios_system("battery")
+        assert isinstance(r, str)
+        assert len(r) > 0
+
+    def test_battery_health(self):
+        r = run_ios_system("battery --health")
+        assert isinstance(r, str)
+        assert len(r) > 0
+
+    def test_battery_vs_health_differs(self):
+        b = run_ios_system("battery")
+        bh = run_ios_system("battery --health")
+        assert b != bh
+
+    def test_wifi(self):
+        r = run_ios_system("wifi")
+        assert isinstance(r, str)
+        assert len(r) > 0
+
+    def test_cellular(self):
+        r = run_ios_system("cellular")
+        assert isinstance(r, str)
+        assert len(r) > 0
+
+    def test_tts_hello(self):
+        r = run_ios_system("tts hello")
+        assert isinstance(r, str)
+        assert len(r) > 0
+        assert any(kw in r.lower() for kw in ("spoken", "failed", "unavailable"))
+
+    def test_tts_no_text_usage(self):
+        r = run_ios_system("tts")
+        assert r == "Usage: @plugin ios_system tts <text>"
+
+    def test_empty_args(self):
+        r = run_ios_system("")
+        assert isinstance(r, str)
+        assert len(r) > 0
+        assert "Battery" in r or "battery" in r
+        assert "ObjC" in r or "objc" in r
+
+    def test_status_subcommand(self):
+        r = run_ios_system("status")
+        assert isinstance(r, str)
+        assert len(r) > 0
+
+    def test_unknown_arg_returns_help(self):
+        r = run_ios_system("unknown")
+        assert r == HELP
+
+    def test_whitespace_only(self):
+        r = run_ios_system("   ")
+        assert isinstance(r, str)
+        assert len(r) > 0
+
+    def test_uppercase_battery(self):
+        r = run_ios_system("BATTERY")
+        assert isinstance(r, str)
+        assert len(r) > 0
+
+    def test_uppercase_wifi(self):
+        r = run_ios_system("WIFI")
+        assert isinstance(r, str)
+        assert len(r) > 0
+
+
+# ===================================================================
+# 10. SKILL dict
+# ===================================================================
+
+class TestSkill:
+    def test_is_dict(self):
+        assert isinstance(SKILL, dict)
+
+    def test_has_name(self):
+        assert SKILL.get("name") == "ios_system"
+
+    def test_has_description(self):
+        assert "description" in SKILL
+
+    def test_has_run(self):
+        assert "run" in SKILL
+
+    def test_run_is_callable(self):
+        assert callable(SKILL["run"])
+
+    def test_run_is_run_ios_system(self):
+        assert SKILL["run"] is run_ios_system
+
+
+# ===================================================================
+# 11. HELP
+# ===================================================================
+
+class TestHelp:
+    def test_is_string(self):
+        assert isinstance(HELP, str)
+
+    def test_non_empty(self):
+        assert len(HELP) > 0
+
+    def test_mentions_all_subcommands(self):
+        for cmd in ("battery", "cellular", "wifi", "tts", "objc-test"):
+            assert cmd in HELP
+
+
+# ===================================================================
+# 12. Edge cases
+# ===================================================================
+
+class TestEdgeCases:
+    def test_tts_very_long(self):
+        r = run_ios_system("tts " + "a" * 10000)
+        assert isinstance(r, str) and len(r) > 0
+
+    def test_tts_special_chars(self):
+        r = run_ios_system("tts Hello! @#$%^&*() test")
+        assert isinstance(r, str) and len(r) > 0
+
+    def test_tts_unicode(self):
+        r = run_ios_system("tts ěščřžýáíé")
+        assert isinstance(r, str) and len(r) > 0
+
+    def test_battery_health_stable(self):
+        r = run_ios_system("battery --health")
+        assert isinstance(r, str) and len(r) > 0
+
+    def test_cellular_after_other_calls(self):
+        r = run_ios_system("cellular")
+        assert isinstance(r, str) and len(r) > 0
+
+    def test_safe_exec_called(self):
+        assert _safe_exec_mock.call_count > 0

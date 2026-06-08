@@ -14,7 +14,7 @@ from typing import Optional, Tuple
 def sanitize_input(
     text: str,
     max_length: int = 500,
-    whitelist_regex: str = r'^[a-zA-Z0-9\s.,:_/@-]+$',
+    whitelist_regex: str = r'^[-\w\s.,:\/@|!$%^&*()\[\]{}<>?~#=+;\'"`\\]+$',
     allow_empty: bool = False
 ) -> Optional[str]:
     """

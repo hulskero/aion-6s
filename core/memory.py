@@ -75,6 +75,8 @@ class MemoryManager:
     def _smart_gc(self):
         if self._msg_count % 20 == 0:
             gc.collect()
+        elif self._total_bytes > int(self.max_total_bytes * 0.75):
+            gc.collect()
 
     def cleanup(self):
         with self._lock:

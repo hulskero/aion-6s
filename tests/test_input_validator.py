@@ -27,10 +27,10 @@ def test_sanitize_input():
     assert sanitize_input("", allow_empty=True) == ""
     assert sanitize_input("", allow_empty=False) is None
 
-    # Test invalid input (characters not in whitelist)
-    assert sanitize_input("ls | grep test") is None  # pipe not allowed
-    assert sanitize_input("echo $HOME") is None  # dollar sign not allowed
-    assert sanitize_input("echo `ls`") is None  # backtick not allowed
+    # Test whitelist now allows common command characters
+    assert sanitize_input("ls | grep test") == "ls | grep test"  # pipe allowed
+    assert sanitize_input("echo $HOME") == "echo $HOME"  # dollar sign allowed
+    assert sanitize_input("echo `ls`") == "echo `ls`"  # backtick allowed
 
     print("✓ sanitize_input tests passed")
 

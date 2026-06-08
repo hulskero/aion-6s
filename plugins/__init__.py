@@ -129,6 +129,12 @@ def install_plugin(name, url, plugins_dir):
         return None, f"Download failed: {e}"
     except Exception as e:
         return None, f"Error: {e}"
+    try:
+        with open(dest) as f:
+            compile(f.read(), dest, 'exec')
+    except SyntaxError as e:
+        os.remove(dest)
+        return None, f"Downloaded plugin has syntax errors: {e}"
     plugins = load_plugins(plugins_dir, lazy=True)
     plugin_name = name[:-3]
     if plugin_name in plugins:

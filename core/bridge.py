@@ -10,8 +10,8 @@ from collections import deque
 
 import ssl
 _SSL_CONTEXT = ssl.create_default_context()
-_SSL_CONTEXT.check_hostname = False
-_SSL_CONTEXT.verify_mode = ssl.CERT_NONE
+# SSL verification is enabled by default.
+# Set "verify_ssl": false in config to disable (e.g., for proxy/VPN environments).
 
 
 class APIError(Exception):
@@ -21,13 +21,13 @@ class APIError(Exception):
 class Bridge:
     __slots__ = [
         "api_key", "base_url", "model", "max_tokens", "temperature",
-        "request_timeout", "rate_limit", "_retry_max", "_last_latency",
+        "request_timeout", "rate_limit", "verify_ssl", "_retry_max", "_last_latency",
         "_last_usage", "_call_timestamps", "_network_ok", "_rlock",
     ]
 
     DEFAULTS = {
         "max_tokens": 256,
-        "request_timeout": 45,
+        "request_timeout": 90,
         "rate_limit": 30,
         "temperature": 0.1,
     }
@@ -41,7 +41,8 @@ class Bridge:
         self.temperature = config.get("temperature", self.DEFAULTS["temperature"])
         self.request_timeout = config.get("request_timeout", self.DEFAULTS["request_timeout"])
         self.rate_limit = config.get("rate_limit", self.DEFAULTS["rate_limit"])
-        self._retry_max = 5
+        self.verify_ssl = config.get("verify_ssl", True)
+        self._retry_max = config.get("retry_max", 5)
         self._last_latency = 0
         self._last_usage = None
         self._call_timestamps = deque()
@@ -56,6 +57,7 @@ class Bridge:
         self.temperature = config.get("temperature", self.DEFAULTS["temperature"])
         self.request_timeout = config.get("request_timeout", self.DEFAULTS["request_timeout"])
         self.rate_limit = config.get("rate_limit", self.DEFAULTS["rate_limit"])
+        self._retry_max = config.get("retry_max", 5)
         self._network_ok = False
         self._call_timestamps.clear()
 
@@ -100,8 +102,9 @@ class Bridge:
     def _build_opener(self):
         import urllib.request
         try:
+            ctx = _SSL_CONTEXT if self.verify_ssl else ssl._create_unverified_context()
             return urllib.request.build_opener(
-                urllib.request.HTTPSHandler(context=_SSL_CONTEXT)
+                urllib.request.HTTPSHandler(context=ctx)
             )
         except Exception:
             import warnings
