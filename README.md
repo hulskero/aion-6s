@@ -57,8 +57,8 @@ Pak spusť znovu: `python3 aion.py`
 @plugin system_tools     - CPU, disk, uptime, WiFi
 @plugin webfetch <url>   - stáhne obsah stránky
 @plugin weather <město>  - počasí (wttr.in + Open-Meteo fallback)
-@plugin nfc_manager      - čtení/zápis NFC tagů
 ```
+> **Poznámka:** Pluginy `nfc_manager` a `daemon` byly odstraněny v rámci Phase 1 cleanup.
 
 ## Bezpečnost
 
@@ -67,8 +67,6 @@ Pak spusť znovu: `python3 aion.py`
 - Audit log všech operací s obfuskací tajných dat
 - API klíč ideálně v `NVIDIA_API_KEY` env var (ne v `config.json`)
 - Vstupní validace a sanitizace pro prevenci injection útoků
-- Omezení pracovního adresáře na sandboxovaný workspace
-- Síťový přístup omezen na whitelisted domény
 - Velikostní omezení výstupu s automatickým zkrácením
 - Ochrana proti shell injection přes bezpečné subprocess volání
 

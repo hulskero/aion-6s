@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from core.bridge import APIError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class SelfHeal:
             if os.path.exists(self._cache_path):
                 with open(self._cache_path) as f:
                     return json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError, ValueError):
             LOGGER.debug("heal cache load failed")
         return {}
 
@@ -57,7 +58,7 @@ class SelfHeal:
             with open(tmp, "w") as f:
                 json.dump(self._cache, f, indent=2)
             os.replace(tmp, self._cache_path)
-        except Exception:
+        except (OSError, TypeError):
             LOGGER.warning("heal cache save failed")
 
     def heal(self, cmd, stderr):
@@ -92,7 +93,8 @@ If impossible, output: FAIL <reason>"""
                     {"role": "system", "content": "Output ONLY the fixed command or FAIL <reason>."},
                     {"role": "user", "content": prompt},
                 ])
-            except Exception:
+            except (APIError, OSError) as e:
+                LOGGER.debug("heal API call failed: %s", e)
                 self._cache[cache_key] = "FAIL api_error"
                 self._save_cache()
                 return None

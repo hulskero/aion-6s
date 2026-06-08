@@ -92,7 +92,7 @@ def _obfuscate_secrets(text):
         text = pat.sub(repl, text)
     return text
 
-MAX_AUDIT_BYTES = 1_048_576  # 1 MB
+MAX_AUDIT_BYTES = 1_048_576  # 1 MB, overridden by config log_max_mb
 _AUDIT_BUFFER = []
 _AUDIT_FLUSH_INTERVAL = 5
 _audit_lock = threading.Lock()
@@ -110,8 +110,8 @@ def _rotate_audit_log():
             with open(AUDIT_LOG, "w") as f:
                 f.writelines(lines[-1000:])
             _audit_log_size = 0
-    except Exception:
-        LOGGER.debug("audit log rotate failed")
+    except Exception as e:
+        LOGGER.debug("audit log rotate failed: %s", e)
 
 
 def _flush_audit_buffer():
@@ -131,8 +131,8 @@ def _flush_audit_buffer():
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             _AUDIT_BUFFER.clear()
             _audit_log_size = None
-        except Exception:
-            LOGGER.warning("audit buffer flush failed")
+        except Exception as e:
+            LOGGER.warning("audit buffer flush failed: %s", e)
 
 
 def audit_log(entry):
@@ -149,15 +149,19 @@ def audit_log(entry):
             buffer_len = len(_AUDIT_BUFFER)
         if buffer_len >= _AUDIT_FLUSH_INTERVAL:
             _flush_audit_buffer()
-    except Exception:
-        LOGGER.debug("audit_log entry failed")
+    except Exception as e:
+        LOGGER.debug("audit_log entry failed: %s", e)
 
 
 SESSION_DIR = os.path.join(os.path.dirname(__file__), "sessions")
+os.makedirs(SESSION_DIR, exist_ok=True)
 
 PIXEL_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋⠙⠹⠸⠼⠳⠦⠧⠇⠏"
 
-_AI_ACTION_RE = re.compile(r'@(cmd|plugin|shortcut)\s+(.+)', re.MULTILINE)
+_AI_ACTION_RE = re.compile(r'@(cmd|plugin|shortcut|read|grep|glob)\s+(.+)', re.MULTILINE)
+
+_WRITE_RE = re.compile(r'@write\s+(\S+)\n(.*?)(?=\n@|\Z)', re.DOTALL)
+_EDIT_RE = re.compile(r'@edit\s+(\S+)\nOLD:\n(.*?)\nNEW:\n(.*?)(?=\n@|\Z)', re.DOTALL)
 
 
 class AION:
@@ -165,18 +169,23 @@ class AION:
         "config", "bridge", "jailbreak", "memory",
         "healer", "plugins", "system_prompt", "mode",
         "config_path", "cmd_history", "last_user_msg",
-        "workspace",
+        "workspace", "lock", "compact",
     ]
 
     def __init__(self):
         self.config_path = os.path.join(os.path.dirname(__file__), "config.json")
         self.config = self._load_or_create_config()
+        global MAX_AUDIT_BYTES
+        mb = self.config.get("log_max_mb", 1)
+        MAX_AUDIT_BYTES = int(mb) * 1024 * 1024
         self.mode = "chat"
         self.cmd_history = []
         self.last_user_msg = ""
         # Define workspace directory for sandboxing
         self.workspace = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
         os.makedirs(self.workspace, exist_ok=True)
+        self.lock = threading.Lock()
+        self.compact = False
         self._init_components()
 
     def _validate_config(self, config):
@@ -291,16 +300,15 @@ class AION:
                 return config
 
     def _prompt_api_key(self):
-        sys.stdout.write(f"{ANSI['SYS']}Enter NVIDIA API key (nvapi-xxx): {ANSI['RST']}")
-        sys.stdout.flush()
-        try:
-            key = input().strip()
-            if key and key.startswith("nvapi-"):
-                return key
-            cl("ERR", "Invalid key format. Must start with 'nvapi-'")
-        except EOFError:
-            pass
-        return ""
+        for attempt in range(3):
+            try:
+                key = input("Enter NVIDIA API key (nvapi-xxx): ").strip()
+                if key:
+                    return key
+            except (EOFError, KeyboardInterrupt):
+                break
+        cl("ERR", "No API key provided. Set NVIDIA_API_KEY env var or restart.")
+        sys.exit(1)
 
     def _prompt_config_interactive(self, default_config):
         c("SYS", "Enter API key: ")
@@ -385,6 +393,11 @@ TOOLS:
   @shortcut run <name> [input]  - run iOS Shortcut
   @shortcut create <name>       - create iOS Shortcut
   @shortcut list                - list iOS Shortcuts
+  @read <path>             - read file contents with line numbers
+  @write <path>            - write content to file (put content after @write line)
+  @edit <path>             - replace text in file (use OLD:/NEW: blocks)
+  @grep <pattern>          - search for pattern in source files
+  @glob <pattern>          - find files matching glob pattern
 
 HOW TO USE TOOLS:
 When asked for something requiring a tool:
@@ -417,8 +430,16 @@ RULES:
 
     def _exec_cmd(self, cmd, allow_heal=True):
         from core.guardrails import check, confirm, reset_confirm
+        from core.input_validator import sanitize_input
 
         t0 = time.time()
+
+        sane = sanitize_input(cmd)
+        if sane is None:
+            c("ERR", f"  ✗ $ {cmd}")
+            print(f"{ANSI['GRY']}  │{ANSI['RST']} Input validation failed: invalid characters or too long")
+            audit_log({"t": time.time(), "action": "blocked", "cmd": cmd, "reason": "input validation failed"})
+            return None
 
         blocked, is_dest = check(cmd)
         if blocked:
@@ -439,9 +460,10 @@ RULES:
                 audit_log({"t": time.time(), "action": "skipped", "cmd": cmd, "reason": "user declined"})
                 return None
 
-        self.cmd_history.append(cmd)
-        if len(self.cmd_history) > 100:
-            self.cmd_history = self.cmd_history[-50:]
+        with self.lock:
+            self.cmd_history.append(cmd)
+            if len(self.cmd_history) > 100:
+                self.cmd_history = self.cmd_history[-50:]
 
         c("GRY", f"  ◎ $ {cmd}")
         result = self.jailbreak.run(cmd)
@@ -449,14 +471,12 @@ RULES:
         duration = time.time() - t0
 
         ok = result and result.get("success")
-        sys.stdout.write(f"  {ANSI['SYS'] if ok else ANSI['ERR']}{'✓' if ok else '✗'}{ANSI['RST']} ({duration:.1f}s)\n")
+        if self.compact:
+            sys.stdout.write(f"  {'✓' if ok else '✗'} ({duration:.1f}s)\n")
+        else:
+            sys.stdout.write(f"  {ANSI['SYS'] if ok else ANSI['ERR']}{'✓' if ok else '✗'}{ANSI['RST']} ({duration:.1f}s)\n")
 
-        if result and result["stdout"]:
-            for line in result["stdout"].rstrip().split("\n"):
-                print(f"{ANSI['GRY']}  │{ANSI['RST']} {line}")
-        if result and result["stderr"]:
-            for line in result["stderr"].rstrip().split("\n"):
-                print(f"{ANSI['GRY']}  │{ANSI['RST']} {ANSI['ERR']}{line}{ANSI['RST']}")
+        self._print_output(result)
 
         if result and not result["success"] and result["stderr"] and allow_heal:
             if self.mode == "plan":
@@ -472,14 +492,10 @@ RULES:
                     if healed and healed["success"]:
                         sys.stdout.write(f"  {ANSI['SYS']}✓{ANSI['RST']} ({dur2:.1f}s)\n")
                         result = healed
-                        if healed.get("stdout"):
-                            for line in healed["stdout"].rstrip().split("\n"):
-                                print(f"{ANSI['GRY']}  │{ANSI['RST']} {line}")
+                        self._print_output(healed)
                     else:
                         sys.stdout.write(f"  {ANSI['ERR']}✗{ANSI['RST']} ({dur2:.1f}s)\n")
-                        if healed and healed.get("stderr"):
-                            for line in healed["stderr"].rstrip().split("\n"):
-                                print(f"{ANSI['GRY']}  │{ANSI['RST']} {ANSI['ERR']}{line}{ANSI['RST']}")
+                        self._print_output(healed)
 
         success = result.get("success", False) if result else False
         audit_log({
@@ -490,6 +506,88 @@ RULES:
 
         return result
 
+    def _print_output(self, result):
+        if self.compact:
+            out = (result.get("stdout") or "").rstrip()[:200]
+            if out:
+                print(f"  {out}")
+            return
+        if result and result.get("stdout"):
+            for line in result["stdout"].rstrip().split("\n"):
+                print(f"{ANSI['GRY']}  │{ANSI['RST']} {line}")
+        if result and result.get("stderr"):
+            for line in result["stderr"].rstrip().split("\n"):
+                print(f"{ANSI['GRY']}  │{ANSI['RST']} {ANSI['ERR']}{line}{ANSI['RST']}")
+
+    def _read_file(self, path):
+        try:
+            with open(path) as f:
+                lines = f.readlines()
+            max_digits = len(str(len(lines)))
+            numbered = "".join(
+                f"{i+1:>{max_digits}}|{line}" for i, line in enumerate(lines)
+            )
+            return numbered
+        except FileNotFoundError:
+            return f"File not found: {path}"
+        except IsADirectoryError:
+            return f"Is a directory: {path}"
+        except OSError as e:
+            return f"Error reading {path}: {e}"
+
+    def _write_file(self, path, content):
+        try:
+            with open(path, "w") as f:
+                f.write(content)
+            return f"Written {len(content)} bytes to {path}"
+        except OSError as e:
+            return f"Error writing {path}: {e}"
+
+    def _edit_file(self, path, old, new):
+        try:
+            with open(path) as f:
+                content = f.read()
+            if old not in content:
+                return f"String not found in {path}"
+            new_content = content.replace(old, new, 1)
+            with open(path, "w") as f:
+                f.write(new_content)
+            return f"Edited 1 occurrence in {path}"
+        except OSError as e:
+            return f"Error editing {path}: {e}"
+
+    def _grep_search(self, pattern):
+        import fnmatch
+        root = os.path.dirname(__file__)
+        results = []
+        pat = re.compile(pattern, re.IGNORECASE)
+        for dirpath, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if not d.startswith((".", "__pycache__", "sessions", "workspace"))]
+            for f in files:
+                if f.endswith(".py"):
+                    path = os.path.join(dirpath, f)
+                    try:
+                        with open(path) as fh:
+                            for i, line in enumerate(fh, 1):
+                                if pat.search(line):
+                                    rel = os.path.relpath(path, root)
+                                    results.append(f"{rel}:{i}: {line.rstrip()}")
+                    except (OSError, UnicodeDecodeError):
+                        continue
+        if not results:
+            return "No matches found"
+        return "\n".join(results[:50])
+
+    def _glob_search(self, pattern):
+        import glob as globmod
+        try:
+            matches = sorted(globmod.glob(pattern, recursive=True))
+            if not matches:
+                return f"No files match: {pattern}"
+            return "\n".join(matches[:50])
+        except Exception as e:
+            return f"Glob error: {e}"
+
     def _exec_plugin(self, name, args=""):
         if self.mode == "plan":
             c("GRY", f"  [plan] @plugin {name} {args}")
@@ -499,11 +597,11 @@ RULES:
             c("ERR", f"  ✗ @plugin {name} {args} — not found")
             msg = f"Plugin '{name}' not found. Available: {list(self.plugins.keys())}"
             return {"success": False, "output": msg}
-        plugin = self.plugins[name]
-        if plugin.get("_lazy"):
-            from plugins import _load_plugin_module
-            plugin["run"] = _load_plugin_module(plugin)
-            plugin.pop("_lazy", None)
+        with self.lock:
+            plugin = self.plugins.get(name)
+            if plugin and plugin.pop("_lazy", None):
+                from plugins import _load_plugin_module
+                plugin["run"] = _load_plugin_module(plugin)
         t0 = time.time()
         c("GRY", f"  ◎ @plugin {name} {args}")
         try:
@@ -546,26 +644,65 @@ RULES:
             return []
 
         results = []
+
+        for match in _WRITE_RE.finditer(text):
+            path = match.group(1)
+            content = match.group(2).strip()
+            result = {"kind": "write", "input": path, "stdout": "", "success": False}
+            result["stdout"] = self._write_file(path, content)
+            result["success"] = True
+            results.append(result)
+            audit_log({"t": time.time(), "action": "write", "path": path})
+
+        for match in _EDIT_RE.finditer(text):
+            path = match.group(1)
+            old = match.group(2)
+            new = match.group(3)
+            result = {"kind": "edit", "input": path, "stdout": "", "success": False}
+            result["stdout"] = self._edit_file(path, old, new)
+            result["success"] = True
+            results.append(result)
+            audit_log({"t": time.time(), "action": "edit", "path": path})
+
         for match in _AI_ACTION_RE.finditer(text):
             kind = match.group(1)
             rest = match.group(2).strip().strip('"').strip("'")
-            result = {"kind": kind, "input": rest, "stdout": "", "success": False}
-            if kind == "cmd":
+
+            if kind in ("cmd",):
                 cmd_res = self._exec_cmd(rest, allow_heal=heal)
                 if cmd_res:
-                    result["stdout"] = (cmd_res.get("stdout") or "") + (cmd_res.get("stderr") or "")
-                    result["success"] = cmd_res.get("success", False)
-                    result["exit_code"] = cmd_res.get("exit_code", 0)
+                    result = {
+                        "kind": "cmd", "input": rest,
+                        "stdout": (cmd_res.get("stdout") or "") + (cmd_res.get("stderr") or ""),
+                        "success": cmd_res.get("success", False),
+                        "exit_code": cmd_res.get("exit_code", 0),
+                    }
+                    results.append(result)
             elif kind == "plugin":
                 parts = rest.split(None, 1)
                 plugin_res = self._exec_plugin(parts[0], parts[1] if len(parts) > 1 else "")
-                result["stdout"] = plugin_res["output"]
-                result["success"] = plugin_res["success"]
+                results.append({
+                    "kind": "plugin", "input": rest,
+                    "stdout": plugin_res["output"],
+                    "success": plugin_res["success"],
+                })
             elif kind == "shortcut":
                 shortcut_res = self._exec_shortcut(rest)
-                result["success"] = shortcut_res.get("success", True) if shortcut_res else True
-                result["stdout"] = (shortcut_res.get("stdout") or "") + (shortcut_res.get("stderr") or "") if shortcut_res else ""
-            results.append(result)
+                results.append({
+                    "kind": "shortcut", "input": rest,
+                    "stdout": (shortcut_res.get("stdout") or "") + (shortcut_res.get("stderr") or "") if shortcut_res else "",
+                    "success": shortcut_res.get("success", True) if shortcut_res else True,
+                })
+            elif kind == "read":
+                out = self._read_file(rest)
+                results.append({"kind": "read", "input": rest, "stdout": out, "success": True})
+            elif kind == "grep":
+                out = self._grep_search(rest)
+                results.append({"kind": "grep", "input": rest, "stdout": out, "success": True})
+            elif kind == "glob":
+                out = self._glob_search(rest)
+                results.append({"kind": "glob", "input": rest, "stdout": out, "success": True})
+
         return results
 
     def _format_tool_results(self, results):
@@ -586,6 +723,16 @@ RULES:
                     lines.append(out[:500])
             elif kind == "shortcut":
                 lines.append(f"[shortcut] {inp}")
+            elif kind == "read":
+                lines.append(f"[read] {inp}")
+                out = (r.get("stdout") or "").rstrip()
+                if out:
+                    lines.append(out[:2000])
+            elif kind in ("write", "edit", "grep", "glob"):
+                lines.append(f"[{kind}] {inp}")
+                out = (r.get("stdout") or "").rstrip()
+                if out:
+                    lines.append(out)
         result = "\n".join(lines)
         return result[:2000] if len(result) > 2000 else result
 
@@ -775,7 +922,7 @@ RULES:
                         e = json.loads(l)
                         ts = time.strftime("%H:%M:%S", time.localtime(e["t"]))
                         cl("SYS", f"  {ts} {e.get('action','?'):>8} | {e.get('cmd','')[:50]}")
-                    except Exception:
+                    except (OSError, json.JSONDecodeError):
                         LOGGER.debug("failed to parse audit log line")
             else:
                 cl("SYS", "No audit log yet.")
@@ -926,12 +1073,17 @@ RULES:
             cl("SYS", f"Mode: {self.mode}  |  Jailbreak: {info['mode']}")
             cl("SYS", f"OS: {info['uname'][:80]}")
 
+        elif cmd == "/compact":
+            self.compact = not self.compact
+            cl("SYS", f"Compact mode: {'ON' if self.compact else 'OFF'}")
+
         elif cmd == "/help":
             cl("SYS", f"""Commands:
   /plan              Plan mode — AI plans, nothing executes
   /build             Build mode — execute with step confirmation
   /auto              Auto mode — full autonomous, guardrails only
   /chat              Chat mode (default) — commands with warning
+  /compact           Toggle compact output mode
   /battery           Check battery status
   /apikey <key>      Change API key
   /plugins           List loaded plugins
@@ -1074,11 +1226,14 @@ RULES:
                 sys.stdout.write(f"{color}{token}{ANSI['RST']}")
                 sys.stdout.flush()
                 tokens.append(token)
-        except Exception as e:
+        except (Exception, KeyboardInterrupt) as e:
             if not stop.is_set():
                 stop.set()
                 t.join(timeout=2)
-            cl("ERR", f"\n[API Error] {e}")
+            if isinstance(e, KeyboardInterrupt):
+                cl("SYS", "\nInterrupted.")
+            else:
+                cl("ERR", f"\n[API Error] {e}")
             return None
         finally:
             if not stop.is_set():
@@ -1092,10 +1247,13 @@ RULES:
             prompt = usage.get("prompt_tokens", prompt_chars)
             completion = usage.get("completion_tokens", completion_chars)
         else:
-            prompt = f"{prompt_chars}c"
-            completion = f"{completion_chars}c"
+            prompt = prompt_chars // 4
+            completion = completion_chars // 4
         latency = getattr(self.bridge, "_last_latency", 0)
-        cl("SYS", f"  ↑{prompt} ↓{completion} | {latency:.1f}s | {self.config['model']}")
+        if self.compact:
+            cl("GRY", f"  ↑{prompt}t ↓{completion}t | {latency:.1f}s")
+        else:
+            cl("SYS", f"  ↑{prompt}t ↓{completion}t | {latency:.1f}s | {self.config['model']}")
 
     @staticmethod
     def _setup_notify():
@@ -1138,7 +1296,7 @@ RULES:
             try:
                 with open(path) as f:
                     result[0] = f.readline().strip()
-            except Exception:
+            except (OSError, ValueError):
                 LOGGER.debug("event pipe read failed")
         t = threading.Thread(target=reader, daemon=True)
         t.start()
@@ -1152,7 +1310,7 @@ RULES:
                     data = f.read().strip()
                 if data:
                     return data
-        except Exception:
+        except (OSError, ValueError):
             LOGGER.debug("event file read failed")
         return None
 
@@ -1165,7 +1323,7 @@ RULES:
             try:
                 trigger_result = self.plugins["triggers"]["run"](f"process {raw}")
             except Exception:
-                LOGGER.debug("trigger run failed")
+                LOGGER.warning("trigger run failed")
 
         if trigger_result == "ai" or trigger_result == "":
             handlers = {
@@ -1229,6 +1387,20 @@ RULES:
                 line = input(f"{ANSI['WARN']}{self.mode}>{ANSI['RST']} ")
             except (EOFError, KeyboardInterrupt):
                 _flush_audit_buffer()
+                try:
+                    session_name = f"_autosave_{int(time.time())}"
+                    save_path = os.path.join(SESSION_DIR, f"{session_name}.json")
+                    data = {
+                        "mode": self.mode,
+                        "config": {k: v for k, v in self.config.items() if k != "api_key"},
+                        "context": self.memory.get_context(),
+                        "cmd_history": self.cmd_history[-20:],
+                    }
+                    with open(save_path, "w") as f:
+                        json.dump(data, f)
+                    cl("GRY", f"Session auto-saved: {session_name}")
+                except Exception:
+                    pass
                 cl("SYS", "\nBye.")
                 break
 
@@ -1264,13 +1436,7 @@ RULES:
                     cl("ERR", "Usage: !<command>")
                     continue
                 r = self.jailbreak.run(cmd, timeout=15)
-                out = r["stdout"].strip()
-                err = r["stderr"].strip()
-                if out:
-                    for l_i, line_out in enumerate(out.splitlines()):
-                        cl("SYS" if line_out else "GRY", f"  {line_out}")
-                if err:
-                    cl("ERR", f"  {err[:500]}")
+                self._print_output(r)
                 continue
 
             self.memory.add("user", line)
@@ -1306,19 +1472,4 @@ RULES:
 
 
 if __name__ == "__main__":
-    import sys as _sys
-    args = set(_sys.argv[1:])
-    if "--headless" in args or "--daemon" in args:
-        app = AION()
-        if "--daemon" in args:
-            try:
-                import subprocess as _sp
-                _sp.run(["jetsamctl", "-l", "512", "aion"], capture_output=True, timeout=5)
-                _sp.run(["jetsamctl", "-p", "16", "aion"], capture_output=True, timeout=5)
-            except Exception:
-                LOGGER.debug("jetsamctl tuning failed")
-            cl("SYS", "Daemon mode — jetsam priority 16, limit 512MB")
-        cl("SYS", "Listening for system events (Ctrl+C to stop)")
-        app._listen_events()
-    else:
-        AION().run()
+    AION().run()
