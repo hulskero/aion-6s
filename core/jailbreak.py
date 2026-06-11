@@ -20,13 +20,18 @@ SAFE_COMMANDS = {
     'ioreg', 'pmset',
     # Network
     'curl', 'ping', 'nslookup', 'dig',
-    'ifconfig', 'netstat',
+    'ifconfig', 'netstat', 'host', 'traceroute',
     # Filesystem
     'ls', 'cat', 'echo', 'head', 'tail',
     'wc', 'sort', 'grep', 'awk', 'sed',
     'cp', 'mv', 'mkdir', 'rm', 'touch',
-    'chmod', 'chown',
+    'chmod', 'chown', 'ln', 'readlink',
     'find', 'basename', 'dirname', 'realpath',
+    'mktemp', 'tee', 'tr', 'cut', 'uniq',
+    'comm', 'diff', 'patch', 'file', 'xxd',
+    'hexdump', 'od', 'strings', 'nl', 'fold',
+    'expand', 'unexpand', 'pr', 'printf',
+    'yes', 'seq', 'shuf', 'tsort',
     # iOS / a-Shell
     'open', 'sbreload', 'uicache',
     'shortcuts', 'springcuts',
@@ -39,18 +44,31 @@ SAFE_COMMANDS = {
     'vim', 'pico', 'ed', 'nano',
     # Process
     'ps', 'kill', 'pkill', 'killall',
+    'pgrep', 'pidof', 'nohup', 'nice',
     # Disk
-    'mount', 'stat', 'du',
+    'mount', 'stat', 'du', 'dd', 'sync',
     # Package management (Procursus)
-    'apt', 'apt-get', 'dpkg',
+    'apt', 'apt-get', 'dpkg', 'apt-cache',
     # Source control / download
     'git', 'wget', 'rsync',
     # Archive
     'unzip', 'tar', 'gzip', 'bzip2',
+    'xz', 'zstd', 'unrar', '7z', 'lz4',
+    # Checksum / hash
+    'md5', 'md5sum', 'sha1sum', 'sha256sum',
+    'sha512sum', 'cksum', 'sum',
     # Launch / service
     'launchctl',
     # NFC / RemoteCompanion
     'rc',
+    # Plist tools
+    'plutil', 'PlistBuddy', 'defaults',
+    # macOS-specific (run on Mac host)
+    'sw_vers', 'system_profiler', 'ioreg',
+    'pmset', 'drutil', 'hdiutil', 'csrutil',
+    'security', 'codesign', 'otool', 'nm',
+    'lipo', 'file', 'mdfind', 'mdls',
+    'sips', 'osascript', 'say', 'diskutil',
 }
 
 

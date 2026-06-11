@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=64"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "aion-6s"
@@ -13,9 +13,3 @@ authors = [
     {name = "AION-6S Contributors"},
 ]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
