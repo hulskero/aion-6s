@@ -43,7 +43,7 @@ def _load_objc():
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool
         )(("objc_msgSend", lib))
 
-        libc = ctypes.cdll.LoadLibrary("libc.dylib")
+        libc = ctypes.cdll.LoadLibrary("/usr/lib/libSystem.B.dylib")
 
         _OBJC = {
             "get_class": get_class,
@@ -348,18 +348,24 @@ def _wifi_ext():
 
 
 def keep_awake(enabled=True):
-    """Set iOS idleTimerDisabled — prevents sleep during streaming."""
+    """Prevent iOS sleep. Tries UIApplication, then notify_post."""
     ui_app = _cls("UIApplication")
-    if not ui_app:
-        return False
-    objc = _load_objc()
-    if not objc:
-        return False
-    app = objc["m0"](ui_app, _sel("sharedApplication"))
-    if not app:
-        return False
-    objc["mb"](app, _sel("setIdleTimerDisabled:"), enabled)
-    return True
+    if ui_app:
+        objc = _load_objc()
+        if objc:
+            app = objc["m0"](ui_app, _sel("sharedApplication"))
+            if app:
+                objc["mb"](app, _sel("setIdleTimerDisabled:"), enabled)
+                return True
+    try:
+        libsys = ctypes.cdll.LoadLibrary("/usr/lib/libSystem.B.dylib")
+        n = libsys.notify_post
+        n.argtypes = [ctypes.c_char_p]
+        n.restype = ctypes.c_uint32
+        n(b"com.apple.springboard.keepalive")
+    except Exception:
+        pass
+    return False
 
 
 def _objc_test():
