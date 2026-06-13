@@ -144,6 +144,13 @@ def main():
     # Config
     setup_config()
 
+    # Install Python deps
+    r = run(["python3", "-m", "pip", "install", "-r", "requirements.txt"], timeout=60)
+    if r and r.returncode == 0:
+        info("Python dependencies installed")
+    else:
+        warn("pip install failed (non-critical, core uses stdlib)")
+
     # Verify
     verify_plugins()
 
