@@ -347,25 +347,54 @@ def _wifi_ext():
         return None
 
 
+_KEEP_AWAKE_ASSERTION = None
+_KEEP_AWAKE_IOM = None
+
+
 def keep_awake(enabled=True):
-    """Prevent iOS sleep. Tries UIApplication, then notify_post."""
-    ui_app = _cls("UIApplication")
-    if ui_app:
-        objc = _load_objc()
-        if objc:
-            app = objc["m0"](ui_app, _sel("sharedApplication"))
-            if app:
-                objc["mb"](app, _sel("setIdleTimerDisabled:"), enabled)
-                return True
+    """Prevent iOS sleep via IOKit IOPMAssertion (works from terminal)."""
+    global _KEEP_AWAKE_ASSERTION, _KEEP_AWAKE_IOM
+
+    if _KEEP_AWAKE_ASSERTION is not None:
+        try:
+            _KEEP_AWAKE_IOM.IOPMAssertionRelease(_KEEP_AWAKE_ASSERTION)
+        except Exception:
+            pass
+        _KEEP_AWAKE_ASSERTION = None
+        _KEEP_AWAKE_IOM = None
+
+    if not enabled:
+        return True
+
     try:
-        libsys = ctypes.cdll.LoadLibrary("/usr/lib/libSystem.B.dylib")
-        n = libsys.notify_post
-        n.argtypes = [ctypes.c_char_p]
-        n.restype = ctypes.c_uint32
-        n(b"com.apple.springboard.keepalive")
+        iom = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/IOKit.framework/IOKit"
+        )
+
+        as_type = _cfstr("NoDisplaySleep")
+        as_name = _cfstr("AION-6S")
+
+        if not as_type or not as_name:
+            return False
+
+        as_id = ctypes.c_uint32(0)
+        iom.IOPMAssertionCreateWithName.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        iom.IOPMAssertionCreateWithName.restype = ctypes.c_uint32
+
+        ret = iom.IOPMAssertionCreateWithName(
+            as_type, 255, as_name, ctypes.byref(as_id)
+        )
+
+        if ret == 0:
+            _KEEP_AWAKE_ASSERTION = as_id.value
+            _KEEP_AWAKE_IOM = iom
+            return True
+        return False
     except Exception:
-        pass
-    return False
+        return False
 
 
 def _objc_test():
