@@ -1,3 +1,4 @@
+import json
 import logging
 from core.ios_hw import ioreg_get_first
 from core.jailbreak import safe_exec
@@ -14,6 +15,29 @@ def _get_battery_props():
             if k in props:
                 return props
     return ioreg_get_first("AppleSmartBattery")
+
+
+def _mcp_battery():
+    """Fallback: query local MCP server for battery info (works as mobile user)."""
+    import urllib.request
+    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "get_device_info", "arguments": {}}}).encode()
+    try:
+        resp = urllib.request.urlopen(
+            urllib.request.Request("http://127.0.0.1:8090/mcp",
+                data=payload, headers={"Content-Type": "application/json"}),
+            timeout=5)
+        d = json.loads(resp.read())
+        for c in d.get("result", {}).get("content", []):
+            if c.get("type") == "text":
+                dev = json.loads(c["text"])
+                pct = dev.get("batteryLevel")
+                state = dev.get("batteryState", "unknown")
+                if pct is not None:
+                    return f"Battery: {pct:.0f}%  {state}"
+    except Exception:
+        LOGGER.debug("mcp battery fallback failed")
+    return None
 
 
 def run_battery(args=""):
@@ -80,6 +104,10 @@ def run_battery(args=""):
             return "  ".join(parts)
     except Exception:
         LOGGER.debug("battery ioreg failed")
+
+    mcp = _mcp_battery()
+    if mcp:
+        return mcp
 
     return "Battery: not available on this device"
 
