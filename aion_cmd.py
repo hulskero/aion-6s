@@ -7,16 +7,31 @@ import os, sys, json, subprocess
 
 os.environ["AION_HEADLESS"] = "1"
 
-# If NVIDIA_API_KEY not in env, load from config.json (backward compat)
+# If NVIDIA_API_KEY not in env, try config.json (legacy) then encrypted keyring
 if not os.environ.get("NVIDIA_API_KEY"):
+    _base = os.path.dirname(os.path.abspath(__file__))
+    # Try plaintext config.json first (legacy)
     try:
-        with open(os.path.join(os.path.dirname(__file__), "config.json")) as _cf:
+        with open(os.path.join(_base, "config.json")) as _cf:
             _cfg = json.load(_cf)
         _key = _cfg.get("api_key", "")
         if _key:
             os.environ["NVIDIA_API_KEY"] = _key
     except (OSError, ValueError):
         pass
+    # Try encrypted config.key
+    if not os.environ.get("NVIDIA_API_KEY"):
+        try:
+            sys.path.insert(0, _base)
+            from core.keyring import load_key, key_exists
+            _key_path = os.path.join(_base, "config.key")
+            if key_exists(_key_path):
+                _pw = os.environ.get("AION_KEY_PASSPHRASE", "testpass123")
+                _key = load_key(_key_path, _pw)
+                if _key:
+                    os.environ["NVIDIA_API_KEY"] = _key
+        except Exception:
+            pass
 
 _orig_init = subprocess.Popen.__init__
 def _patched_init(self, args, bufsize=-1, executable=None, **kwargs):
