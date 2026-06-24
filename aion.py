@@ -1345,6 +1345,103 @@ Direct tool commands:
             if hasattr(self.bridge, '_last_latency'):
                 cl("SYS", f"Last API latency: {self.bridge._last_latency:.1f}s")
 
+        elif cmd == "/sysinfo":
+            import subprocess as _sp, os as _os
+            try:
+                vm = _sp.run(["vm_stat"], capture_output=True, text=True, timeout=5).stdout
+                fp=0; ip=0; sp=0
+                for line in vm.split("\n"):
+                    l = line.lower()
+                    if "free" in l and "speculative" not in l and "wired" not in l and "active" not in l:
+                        try: fp = int(line.split(":")[1].strip().rstrip("."))
+                        except: pass
+                    if "inactive" in l:
+                        try: ip = int(line.split(":")[1].strip().rstrip("."))
+                        except: pass
+                    if "speculative" in l:
+                        try: sp = int(line.split(":")[1].strip().rstrip("."))
+                        except: pass
+                avail_mb = (fp + ip + sp) * 4096 / 1048576
+                ram_str = f"{avail_mb:.0f}MB avail"
+            except: ram_str = "n/a"
+            try:
+                sv = _os.statvfs("/")
+                total = sv.f_blocks * sv.f_frsize
+                used = total - sv.f_bfree * sv.f_frsize
+                dsk = f"{used/1073741824:.1f}G / {total/1073741824:.1f}G"
+            except: dsk = "n/a"
+            try: bat = self._exec_plugin("battery", "")
+            except: bat = None
+            bat_str = bat.get("output", "n/a")[:60] if isinstance(bat, dict) else "n/a"
+            try: up = _sp.run(["uptime"], capture_output=True, text=True, timeout=5).stdout.strip()
+            except: up = "n/a"
+            cl("SYS", f"RAM: {ram_str} | Disk: {dsk} | Battery: {bat_str}")
+            cl("SYS", f"Model: {self.config['model']} | Mode: {self.mode}")
+            cl("SYS", up[:80])
+
+        elif cmd == "/free_mem":
+            """Free memory: kill inactive background apps, run GC."""
+            import subprocess as _sp
+            cl("SYS", "Freeing memory...")
+            for bundle in ["com.apple.mobilenotes","com.apple.mobileslideshow","com.google.ios.youtube","com.apple.MobileCal","com.apple.compass","com.apple.mobilemail"]:
+                _sp.run(["killall", bundle], capture_output=True, timeout=5)
+            gc.collect(2)
+            try:
+                vm = _sp.run(["vm_stat"], capture_output=True, text=True, timeout=5).stdout
+                fp = ip = sp = 0
+                for line in vm.split("\n"):
+                    l = line.lower()
+                    if "free" in l and "speculative" not in l and "wired" not in l and "active" not in l:
+                        try: fp = int(line.split(":")[1].strip().rstrip("."))
+                        except: pass
+                    if "inactive" in l:
+                        try: ip = int(line.split(":")[1].strip().rstrip("."))
+                        except: pass
+                    if "speculative" in l:
+                        try: sp = int(line.split(":")[1].strip().rstrip("."))
+                        except: pass
+                avail_mb = (fp + ip + sp) * 4096 / 1048576
+                cl("SYS", f"  ~{avail_mb:.0f} MB avail (free={fp} inactive={ip} speculative={sp} pages)")
+            except:
+                cl("SYS", "  vm_stat unavailable")
+            cl("SYS", "  Background apps killed, GC ran")
+
+        elif cmd == "/uptime":
+            import subprocess as _sp
+            try:
+                up = _sp.run(["uptime"], capture_output=True, text=True, timeout=5).stdout.strip()
+                cl("SYS", up[:100])
+            except:
+                cl("SYS", "uptime: n/a")
+
+        elif cmd == "/cpu":
+            try:
+                r = self._exec_plugin("cpu", "")
+                if r and r.get("output"):
+                    cl("SYS", r["output"])
+            except Exception as e:
+                cl("ERR", f"cpu: {e}")
+
+        elif cmd == "/net":
+            try:
+                r = self._exec_plugin("net", "")
+                if r and r.get("output"):
+                    cl("SYS", r["output"])
+            except Exception as e:
+                cl("ERR", f"net: {e}")
+
+        elif cmd == "/disk":
+            import os as _os
+            try:
+                sv = _os.statvfs("/")
+                total = sv.f_blocks * sv.f_frsize
+                free = sv.f_bfree * sv.f_frsize
+                used = total - sv.f_bavail * sv.f_frsize
+                pct = used / total * 100 if total > 0 else 0
+                cl("SYS", f"Disk: {used/1073741824:.1f}G / {total/1073741824:.1f}G ({pct:.0f}%)  Free: {free/1073741824:.1f}G")
+            except Exception as e:
+                cl("ERR", f"disk: {e}")
+
         elif cmd.startswith("/save"):
             parts = cmd.split(None, 1)
             name = parts[1].strip() if len(parts) > 1 else "default"

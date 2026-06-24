@@ -15,7 +15,7 @@ SAFE_COMMANDS = {
     # System info — a-Shell compatible
     'uname', 'df', 'hostname', 'id',
     'whoami', 'pwd', 'date', 'uptime',
-    'sysctl', 'vm_stat',
+    'sysctl', 'vm_stat', 'free',
     # Hardware / IOKit
     'ioreg', 'pmset',
     # Network
