@@ -15,6 +15,7 @@ except ImportError:
 import itertools
 import logging
 import threading
+from core import keyring as _keyring
 
 # Shrink thread stack from default 512KB → 128KB (saves ~75% per thread)
 # threading.stack_size(128 * 1024)  # REMOVED — causes segfault on iOS
@@ -296,10 +297,10 @@ class AION:
 
         # Priority 2: encrypted key file (config.key)
         key_path = self._key_path()
-        if self._keyring.key_exists(key_path):
+        if _keyring.key_exists(key_path):
             try:
-                passphrase = self._keyring.prompt_passphrase("Key passphrase: ")
-                api_key = self._keyring.load_key(key_path, passphrase)
+                passphrase = _keyring.prompt_passphrase("Key passphrase: ")
+                api_key = _keyring.load_key(key_path, passphrase)
                 default_config["api_key"] = api_key
                 if os.path.exists(self.config_path):
                     try:
@@ -311,7 +312,7 @@ class AION:
                     except Exception:
                         pass
                 return default_config
-            except self._keyring.KeyringError as e:
+            except _keyring.KeyringError as e:
                 cl("ERR", f"Key file error: {e}")
                 cl("SYS", "Falling back to interactive setup...")
 
@@ -326,8 +327,8 @@ class AION:
                     # Auto-migrate to encrypted storage
                     try:
                         cl("SYS", "Migrating plaintext API key to encrypted storage...")
-                        passphrase = self._keyring.prompt_passphrase_twice()
-                        self._keyring.migrate_from_plaintext(plaintext_key, key_path, passphrase)
+                        passphrase = _keyring.prompt_passphrase_twice()
+                        _keyring.migrate_from_plaintext(plaintext_key, key_path, passphrase)
                         config["api_key"] = ""  # clear from in-memory config
                         config.pop("api_key", None)
                         self._save_config(config)
@@ -339,7 +340,7 @@ class AION:
                         default_config.update(config)
                         default_config["api_key"] = plaintext_key
                         return default_config
-                    except self._keyring.KeyringError as e:
+                    except _keyring.KeyringError as e:
                         cl("WARN", f"Migration skipped: {e}")
                         return config
                 if not plaintext_key:
@@ -354,13 +355,13 @@ class AION:
         config = self._validate_config(self._prompt_config_interactive(default_config))
         if config.get("api_key"):
             try:
-                passphrase = self._keyring.prompt_passphrase_twice()
-                self._keyring.save_key(key_path, config["api_key"], passphrase)
+                passphrase = _keyring.prompt_passphrase_twice()
+                _keyring.save_key(key_path, config["api_key"], passphrase)
                 config["api_key"] = ""
                 config.pop("api_key", None)
                 self._save_config(config)
                 cl("SYS", "API key stored encrypted at " + key_path)
-            except self._keyring.KeyringError as e:
+            except _keyring.KeyringError as e:
                 cl("WARN", f"Could not encrypt key: {e}. Stored plaintext.")
             return config
         return config
@@ -414,9 +415,7 @@ class AION:
         from core.memory import MemoryManager
         from core.self_heal import SelfHeal
         from core.guardrails import check, confirm, reset_confirm
-        from core import keyring as _keyring
         from plugins import load_plugins
-        self._keyring = _keyring
 
         self._check_config_security()
 
@@ -1209,8 +1208,8 @@ RULES:
                     cl("SYS", "No plaintext key to lock. Use /apikey <key> first.")
                 else:
                     try:
-                        passphrase = self._keyring.prompt_passphrase_twice()
-                        self._keyring.save_key(key_path, plaintext, passphrase)
+                        passphrase = _keyring.prompt_passphrase_twice()
+                        _keyring.save_key(key_path, plaintext, passphrase)
                         self.config["api_key"] = ""
                         self.config.pop("api_key", None)
                         self._save_config(self.config)
@@ -1219,30 +1218,30 @@ RULES:
                         except OSError:
                             pass
                         cl("SYS", "API key encrypted and saved to " + key_path)
-                    except self._keyring.KeyringError as e:
+                    except _keyring.KeyringError as e:
                         cl("ERR", f"Lock failed: {e}")
                 return
 
             if sub == "--unlock":
                 # Decrypt config.key back into config.json (plaintext)
-                if not self._keyring.key_exists(key_path):
+                if not _keyring.key_exists(key_path):
                     cl("SYS", "No encrypted key file found.")
                     return
                 try:
-                    passphrase = self._keyring.prompt_passphrase("Key passphrase: ")
-                    api_key = self._keyring.load_key(key_path, passphrase)
+                    passphrase = _keyring.prompt_passphrase("Key passphrase: ")
+                    api_key = _keyring.load_key(key_path, passphrase)
                     self.config["api_key"] = api_key
                     self._save_config(self.config)
                     self.bridge.update_api_key(api_key)
                     cl("SYS", "API key decrypted into config.json")
-                except self._keyring.KeyringError as e:
+                except _keyring.KeyringError as e:
                     cl("ERR", f"Unlock failed: {e}")
                 return
 
             if sub == "--status":
                 if os.environ.get("NVIDIA_API_KEY"):
                     cl("SYS", "API key: env var NVIDIA_API_KEY")
-                elif self._keyring.key_exists(key_path):
+                elif _keyring.key_exists(key_path):
                     cl("SYS", "API key: encrypted at " + key_path)
                 elif self.config.get("api_key"):
                     masked = self.config["api_key"][:12] + "..." + self.config["api_key"][-4:]
@@ -1256,7 +1255,7 @@ RULES:
             if len(parts) == 1:
                 if os.environ.get("NVIDIA_API_KEY"):
                     cl("SYS", "API key: env var NVIDIA_API_KEY")
-                elif self._keyring.key_exists(key_path):
+                elif _keyring.key_exists(key_path):
                     cl("SYS", "API key: encrypted at " + key_path)
                     cl("SYS", "Usage: /apikey nvapi-xxx | /apikey --lock | /apikey --unlock | /apikey --status")
                 else:
