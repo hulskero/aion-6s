@@ -61,6 +61,11 @@ class Bridge:
         self._network_ok = False
         self._call_timestamps.clear()
 
+    def update_api_key(self, new_key):
+        """Hot-swap the API key without rebuilding the bridge."""
+        self.api_key = new_key or os.environ.get("NVIDIA_API_KEY", "")
+        self._network_ok = False
+
     def _enforce_rate_limit(self):
         if self.rate_limit <= 0:
             return
@@ -75,29 +80,6 @@ class Bridge:
                 wait = 60 - (now - oldest)
                 if wait > 0:
                     time.sleep(wait)
-
-    def _wait_for_network(self, max_retries=3):
-        import urllib.parse
-        host = urllib.parse.urlparse(self.base_url).hostname
-        port = urllib.parse.urlparse(self.base_url).port or 443
-        try:
-            sock = socket.create_connection((host, port), timeout=3)
-            sock.close()
-            self._network_ok = True
-            return
-        except (socket.timeout, OSError):
-            pass
-        for attempt in range(max_retries):
-            try:
-                sock = socket.create_connection((host, port), timeout=10)
-                sock.close()
-                self._network_ok = True
-                return
-            except (socket.timeout, OSError):
-                self._network_ok = False
-                if attempt == max_retries - 1:
-                    raise APIError(f"Network timed out: {host}:{port}")
-                time.sleep(5 + random.uniform(0, 3))
 
     def _build_opener(self):
         import urllib.request
@@ -119,7 +101,6 @@ class Bridge:
                 "  Set NVIDIA_API_KEY env var, or add \"api_key\" to config.json.\n"
                 "  Get one at https://build.nvidia.com/deepseek-ai/deepseek-v4-flash"
             )
-        self._wait_for_network()
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "User-Agent": "AION-6S/1.0",

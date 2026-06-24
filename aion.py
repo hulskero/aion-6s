@@ -260,6 +260,10 @@ class AION:
 
         return config
 
+    def _key_path(self):
+        """Return path to encrypted key file (config.key next to config.json)."""
+        return os.path.splitext(self.config_path)[0] + ".key"
+
     def _load_or_create_config(self):
         default_config = {
             "api_key": "",
@@ -272,32 +276,94 @@ class AION:
             "max_tokens": 512,
             "request_timeout": 90,
             "rate_limit": 30,
-            "retry_max": 5
+            "retry_max": 5,
+            "verify_ssl": False,
         }
 
-        # Prefer environment variable for API key (more secure)
+        # Priority 1: environment variable (most secure — never written to disk)
         if os.environ.get("NVIDIA_API_KEY"):
             default_config["api_key"] = os.environ["NVIDIA_API_KEY"]
-            # Skip file based config if env var is set
-            return default_config
-
-        while True:
             if os.path.exists(self.config_path):
                 try:
                     with open(self.config_path) as f:
-                        config = json.load(f)
-                    config = self._validate_config(config)
-                    key = config.get("api_key", "")
-                    if not key or len(key) < 40 or key == "nvapi-REPLACE-WITH-YOUR-KEY":
-                        config["api_key"] = self._prompt_api_key()
+                        file_cfg = json.load(f)
+                    if isinstance(file_cfg, dict):
+                        file_cfg.pop("api_key", None)
+                        default_config.update(file_cfg)
+                except Exception:
+                    pass
+            return default_config
+
+        # Priority 2: encrypted key file (config.key)
+        key_path = self._key_path()
+        if self._keyring.key_exists(key_path):
+            try:
+                passphrase = self._keyring.prompt_passphrase("Key passphrase: ")
+                api_key = self._keyring.load_key(key_path, passphrase)
+                default_config["api_key"] = api_key
+                if os.path.exists(self.config_path):
+                    try:
+                        with open(self.config_path) as f:
+                            file_cfg = json.load(f)
+                        if isinstance(file_cfg, dict):
+                            file_cfg.pop("api_key", None)
+                            default_config.update(file_cfg)
+                    except Exception:
+                        pass
+                return default_config
+            except self._keyring.KeyringError as e:
+                cl("ERR", f"Key file error: {e}")
+                cl("SYS", "Falling back to interactive setup...")
+
+        # Priority 3: plaintext config.json (legacy) — auto-migrate
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path) as f:
+                    config = json.load(f)
+                config = self._validate_config(config)
+                plaintext_key = config.get("api_key", "")
+                if plaintext_key and len(plaintext_key) >= 40 and plaintext_key != "nvapi-REPLACE-WITH-YOUR-KEY":
+                    # Auto-migrate to encrypted storage
+                    try:
+                        cl("SYS", "Migrating plaintext API key to encrypted storage...")
+                        passphrase = self._keyring.prompt_passphrase_twice()
+                        self._keyring.migrate_from_plaintext(plaintext_key, key_path, passphrase)
+                        config["api_key"] = ""  # clear from in-memory config
+                        config.pop("api_key", None)
                         self._save_config(config)
-                    return config
-                except Exception as e:
-                    cl("ERR", f"Config load error: {e}")
-            cl("SYS", "No valid config found. Please configure AION-6S.")
-            config = self._validate_config(self._prompt_config_interactive(default_config))
-            if config.get("api_key"):
+                        try:
+                            os.chmod(self.config_path, 0o600)
+                        except OSError:
+                            pass
+                        cl("SYS", "Migration complete. Key now stored encrypted.")
+                        default_config.update(config)
+                        default_config["api_key"] = plaintext_key
+                        return default_config
+                    except self._keyring.KeyringError as e:
+                        cl("WARN", f"Migration skipped: {e}")
+                        return config
+                if not plaintext_key:
+                    config["api_key"] = self._prompt_api_key()
+                    self._save_config(config)
                 return config
+            except Exception as e:
+                cl("ERR", f"Config load error: {e}")
+
+        # Priority 4: first-run interactive setup with encrypted storage
+        cl("SYS", "No valid config found. Please configure AION-6S.")
+        config = self._validate_config(self._prompt_config_interactive(default_config))
+        if config.get("api_key"):
+            try:
+                passphrase = self._keyring.prompt_passphrase_twice()
+                self._keyring.save_key(key_path, config["api_key"], passphrase)
+                config["api_key"] = ""
+                config.pop("api_key", None)
+                self._save_config(config)
+                cl("SYS", "API key stored encrypted at " + key_path)
+            except self._keyring.KeyringError as e:
+                cl("WARN", f"Could not encrypt key: {e}. Stored plaintext.")
+            return config
+        return config
 
     def _prompt_api_key(self):
         for attempt in range(3):
@@ -348,7 +414,9 @@ class AION:
         from core.memory import MemoryManager
         from core.self_heal import SelfHeal
         from core.guardrails import check, confirm, reset_confirm
+        from core import keyring as _keyring
         from plugins import load_plugins
+        self._keyring = _keyring
 
         self._check_config_security()
 
@@ -372,13 +440,19 @@ class AION:
     def _check_config_security(self):
         if os.environ.get("NVIDIA_API_KEY"):
             return
+        key_path = self._key_path()
+        if os.path.exists(key_path):
+            mode = oct(os.stat(key_path).st_mode)[-3:]
+            if mode != "600" and mode != "640":
+                cl("WARN", f"  [SECURITY] config.key permissions: {mode} (recommend: 600)")
+            return
         if os.path.exists(self.config_path):
             mode = oct(os.stat(self.config_path).st_mode)[-3:]
             if mode != "600" and mode != "640":
                 cl("WARN", f"  [SECURITY] config.json permissions: {mode} (recommend: 600)")
         if self.config.get("api_key"):
             cl("WARN", "  [SECURITY] API key stored in plaintext config.json")
-            cl("WARN", "  [SECURITY] Safer: set NVIDIA_API_KEY env var instead")
+            cl("WARN", "  [SECURITY] Run /apikey --lock to encrypt it")
 
     def _build_prompt(self):
         plugin_list = "\n".join(
@@ -519,6 +593,27 @@ RULES:
             for line in result["stderr"].rstrip().split("\n"):
                 print(f"{ANSI['GRY']}  │{ANSI['RST']} {ANSI['ERR']}{line}{ANSI['RST']}")
 
+    def _is_safe_path(self, path):
+        """Check if path is within the project sandbox (workspace, sessions, project root, tmp)."""
+        try:
+            abs_path = os.path.realpath(path)
+            cwd = os.path.realpath(os.getcwd())
+            # Allow: cwd, workspace/, sessions/, scripts/, and pytest tmp paths
+            safe_prefixes = [cwd]
+            for sub in ("workspace", "sessions", "scripts"):
+                safe_prefixes.append(os.path.realpath(os.path.join(cwd, sub)))
+            # Allow pytest tmp dirs (used in tests)
+            import tempfile
+            tmp = tempfile.gettempdir()
+            if tmp:
+                safe_prefixes.append(os.path.realpath(tmp))
+            for prefix in safe_prefixes:
+                if abs_path == prefix or abs_path.startswith(prefix + os.sep):
+                    return True
+            return False
+        except (OSError, ValueError):
+            return False
+
     def _read_file(self, path):
         parts = path.rsplit(None, 2)
         path = parts[0]
@@ -527,6 +622,13 @@ RULES:
         if offset < 0:
             offset = 0
         try:
+            # Security: cap file size to prevent OOM on 2GB device
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            if size > 1_048_576:  # 1 MB hard cap
+                return f"Error: file too large ({size} bytes, max 1048576)"
             with open(path) as f:
                 lines = f.readlines()
             if offset >= len(lines):
@@ -549,6 +651,9 @@ RULES:
 
     def _write_file(self, path, content):
         try:
+            # Security: restrict writes to project sandbox
+            if not self._is_safe_path(path):
+                return f"Error: write blocked — path outside sandbox: {path}"
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
                 f.write(content)
@@ -558,6 +663,9 @@ RULES:
 
     def _edit_file(self, path, old, new):
         try:
+            # Security: restrict edits to project sandbox
+            if not self._is_safe_path(path):
+                return f"Error: edit blocked — path outside sandbox: {path}"
             with open(path) as f:
                 content = f.read()
             if old not in content:
@@ -621,7 +729,27 @@ RULES:
         t0 = time.time()
         c("GRY", f"  ◎ @plugin {name} {args}")
         try:
-            output = plugin["run"](args)
+            # Security: run plugin in thread with timeout to prevent hangs
+            import threading
+            _result = [None]
+            _error = [None]
+            def _runner():
+                try:
+                    _result[0] = plugin["run"](args)
+                except Exception as e:
+                    _error[0] = e
+            t = threading.Thread(target=_runner, daemon=True)
+            t.start()
+            t.join(timeout=30)
+            if t.is_alive():
+                return f"Plugin timeout: {name} (30s)"
+            if _error[0]:
+                dur = time.time() - t0
+                sys.stdout.write(f"  {ANSI['ERR']}✗{ANSI['RST']} ({dur:.1f}s)\n")
+                msg = f"Plugin error: {_error[0]}"
+                print(f"{ANSI['GRY']}  │{ANSI['RST']} {msg}")
+                return {"success": False, "output": msg}
+            output = _result[0]
             dur = time.time() - t0
             sys.stdout.write(f"  {ANSI['SYS']}✓{ANSI['RST']} ({dur:.1f}s)\n")
             if output:
@@ -1070,18 +1198,78 @@ RULES:
             self._exec_plugin("battery", "")
 
         elif line.lower().startswith("/apikey"):
-            parts = line.split(None, 1)
+            parts = line.split(None, 2)
+            sub = parts[1].lower() if len(parts) >= 2 else ""
+            key_path = self._key_path()
+
+            if sub == "--lock":
+                # Move plaintext key from config.json into encrypted config.key
+                plaintext = self.config.get("api_key", "")
+                if not plaintext:
+                    cl("SYS", "No plaintext key to lock. Use /apikey <key> first.")
+                else:
+                    try:
+                        passphrase = self._keyring.prompt_passphrase_twice()
+                        self._keyring.save_key(key_path, plaintext, passphrase)
+                        self.config["api_key"] = ""
+                        self.config.pop("api_key", None)
+                        self._save_config(self.config)
+                        try:
+                            os.chmod(self.config_path, 0o600)
+                        except OSError:
+                            pass
+                        cl("SYS", "API key encrypted and saved to " + key_path)
+                    except self._keyring.KeyringError as e:
+                        cl("ERR", f"Lock failed: {e}")
+                return
+
+            if sub == "--unlock":
+                # Decrypt config.key back into config.json (plaintext)
+                if not self._keyring.key_exists(key_path):
+                    cl("SYS", "No encrypted key file found.")
+                    return
+                try:
+                    passphrase = self._keyring.prompt_passphrase("Key passphrase: ")
+                    api_key = self._keyring.load_key(key_path, passphrase)
+                    self.config["api_key"] = api_key
+                    self._save_config(self.config)
+                    self.bridge.update_api_key(api_key)
+                    cl("SYS", "API key decrypted into config.json")
+                except self._keyring.KeyringError as e:
+                    cl("ERR", f"Unlock failed: {e}")
+                return
+
+            if sub == "--status":
+                if os.environ.get("NVIDIA_API_KEY"):
+                    cl("SYS", "API key: env var NVIDIA_API_KEY")
+                elif self._keyring.key_exists(key_path):
+                    cl("SYS", "API key: encrypted at " + key_path)
+                elif self.config.get("api_key"):
+                    masked = self.config["api_key"][:12] + "..." + self.config["api_key"][-4:]
+                    cl("SYS", f"API key: plaintext in config.json ({masked})")
+                    cl("SYS", "Run /apikey --lock to encrypt it")
+                else:
+                    cl("SYS", "API key: not set")
+                return
+
+            # Default: show or set key
             if len(parts) == 1:
-                key = self.config.get("api_key", "")
-                masked = key[:12] + "..." + key[-4:] if len(key) > 16 else "(not set)"
-                cl("SYS", f"API key: {masked}")
-                cl("SYS", "Usage: /apikey nvapi-xxxxxxxxxxxx")
+                if os.environ.get("NVIDIA_API_KEY"):
+                    cl("SYS", "API key: env var NVIDIA_API_KEY")
+                elif self._keyring.key_exists(key_path):
+                    cl("SYS", "API key: encrypted at " + key_path)
+                    cl("SYS", "Usage: /apikey nvapi-xxx | /apikey --lock | /apikey --unlock | /apikey --status")
+                else:
+                    key = self.config.get("api_key", "")
+                    masked = key[:12] + "..." + key[-4:] if len(key) > 16 else "(not set)"
+                    cl("SYS", f"API key: {masked}")
+                    cl("SYS", "Usage: /apikey nvapi-xxxxxxxxxxxx")
             else:
                 new_key = parts[1].strip()
                 self.config["api_key"] = new_key
                 self._save_config(self.config)
-                self.bridge.update_config(self.config)
-                cl("SYS", "API key updated")
+                self.bridge.update_api_key(new_key)
+                cl("SYS", "API key updated (plaintext). Run /apikey --lock to encrypt.")
 
         elif cmd == "/heal":
             cl("SYS", self.healer.summary())
